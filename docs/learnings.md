@@ -1,0 +1,4 @@
+- go mod init github.com/karprabha/job-queue-backend => to initalize go module
+- go install golang.org/x/tools/cmd/goimports@latest => for automatic go imports
+- brew install postgresql@15 => install postgres
+- go install github.com/pressly/goose/v3/cmd/goose@latest => install goose
