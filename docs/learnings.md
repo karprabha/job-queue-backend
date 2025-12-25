@@ -2,3 +2,13 @@
 - go install golang.org/x/tools/cmd/goimports@latest => for automatic go imports
 - brew install postgresql@15 => install postgres
 - go install github.com/pressly/goose/v3/cmd/goose@latest => install goose
+- JSON RESPONSE CHECKLIST (memorize this)
+  - Set Content-Type
+  - Set status code
+  - Convert data to JSON
+  - Write it
+- JSON REQUEST CHECKLIST (memorize later)
+  - Read request body
+  - Parse JSON into struct
+  - Validate data
+  - Use it

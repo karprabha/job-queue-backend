@@ -1,7 +1,6 @@
 package http
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 )
@@ -31,16 +30,13 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		Status: "ok",
 	}
 
-	buffer := bytes.NewBuffer(nil)
-	encoder := json.NewEncoder(buffer)
-
-	err := encoder.Encode(responseData)
+	jsonBytes, err := json.Marshal(responseData)
 	if err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(buffer.Bytes())
+	w.Write(jsonBytes)
 }
