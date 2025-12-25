@@ -249,3 +249,168 @@ For comprehensive explanations, see:
 - [Task 2 Summary](./task2/summary.md) - Quick reference
 - [Task 2 README](./task2/README.md) - Complete overview
 - [Task 2 Concepts Documentation](./task2/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 3 — In-Memory Job Store & List Jobs API
+
+### Quick Setup Commands
+
+- No new dependencies needed (uses standard library: `sync`, `context`, `sort`)
+
+### Dependency Injection Pattern (Memorize This)
+
+```go
+// 1. Define handler struct with dependency
+type JobHandler struct {
+    store store.JobStore  // Interface, not concrete type
+}
+
+// 2. Constructor accepts dependency
+func NewJobHandler(store store.JobStore) *JobHandler {
+    return &JobHandler{store: store}
+}
+
+// 3. Methods use injected dependency
+func (h *JobHandler) CreateJob(...) {
+    h.store.CreateJob(r.Context(), job)
+}
+```
+
+### Store Implementation Pattern
+
+```go
+// Store interface
+type JobStore interface {
+    CreateJob(ctx context.Context, job *domain.Job) error
+    GetJobs(ctx context.Context) ([]domain.Job, error)
+}
+
+// In-memory implementation
+type InMemoryJobStore struct {
+    jobs map[string]domain.Job
+    mu   sync.RWMutex
+}
+
+func (s *InMemoryJobStore) CreateJob(ctx context.Context, job *domain.Job) error {
+    // Check context before lock
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+    }
+    
+    s.mu.Lock()         // Write lock
+    defer s.mu.Unlock()
+    s.jobs[job.ID] = *job
+    return nil
+}
+
+func (s *InMemoryJobStore) GetJobs(ctx context.Context) ([]domain.Job, error) {
+    // Check context before lock
+    select {
+    case <-ctx.Done():
+        return nil, ctx.Err()
+    default:
+    }
+    
+    s.mu.RLock()         // Read lock (allows concurrent reads)
+    defer s.mu.RUnlock()
+    
+    // Convert map to slice
+    jobs := make([]domain.Job, 0, len(s.jobs))
+    for _, job := range s.jobs {
+        jobs = append(jobs, job)
+    }
+    
+    // Sort by creation time
+    sort.Slice(jobs, func(i, j int) bool {
+        return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
+    })
+    
+    return jobs, nil
+}
+```
+
+### Server Setup with Dependency Injection
+
+```go
+func main() {
+    // 1. Create dependencies first
+    jobStore := store.NewInMemoryJobStore()
+    
+    // 2. Inject dependencies into handlers
+    jobHandler := internalhttp.NewJobHandler(jobStore)
+    
+    // 3. Register handler methods
+    mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
+    mux.HandleFunc("GET /jobs", jobHandler.GetJobs)
+    mux.HandleFunc("POST /jobs", jobHandler.CreateJob)
+    
+    // 4. Start server
+    srv := &http.Server{
+        Addr:    ":" + port,
+        Handler: mux,
+    }
+    // ... server startup
+}
+```
+
+### Handler Refactoring: Function → Struct
+
+**Before (Task 2):**
+```go
+// Function handler - no dependencies
+func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
+    job := domain.NewJob(...)
+    // No storage - just return response
+}
+```
+
+**After (Task 3):**
+```go
+// Struct handler - has dependencies
+type JobHandler struct {
+    store store.JobStore
+}
+
+func NewJobHandler(store store.JobStore) *JobHandler {
+    return &JobHandler{store: store}
+}
+
+func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
+    job := domain.NewJob(...)
+    h.store.CreateJob(r.Context(), job)  // Store job
+    // Return response
+}
+
+func (h *JobHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
+    jobs, _ := h.store.GetJobs(r.Context())  // Get all jobs
+    // Return response
+}
+```
+
+### Important Concepts
+
+- **Dependency Injection**: Dependencies come from outside, not created inside
+- **Handler Struct Pattern**: Methods on structs that hold dependencies
+- **In-Memory Storage**: Maps for key-value storage (`map[string]Job`)
+- **Concurrency Safety**: Mutexes prevent race conditions
+- **RWMutex**: Allows concurrent reads, exclusive writes (better for read-heavy workloads)
+- **Context in Storage**: Check context before lock, respect cancellation
+- **Interface Design**: Accept interfaces, return structs (flexibility, testability)
+- **Map to Slice**: Convert map to slice for ordered results, then sort
+
+### Project Structure
+
+- `internal/store/` - Storage layer separated from HTTP
+- Handler struct pattern - Enables dependency injection
+- Clear dependency direction: HTTP → Store → Domain
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 3 Summary](./task3/summary.md) - Quick reference
+- [Task 3 README](./task3/README.md) - Complete overview
+- [Task 3 Concepts Documentation](./task3/concepts/README.md) - Detailed concept explanations
