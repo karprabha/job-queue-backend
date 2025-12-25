@@ -19,12 +19,16 @@ func main() {
 		port = "8080"
 	}
 
+	mux := http.NewServeMux()
+
 	// 2. Set up routes
-	http.HandleFunc("/health", internalhttp.HealthCheckHandler)
+	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
+	mux.HandleFunc("POST /jobs", internalhttp.CreateJobHandler)
 
 	// 3. Create http.Server instance
 	srv := &http.Server{
-		Addr: ":" + port,
+		Addr:    ":" + port,
+		Handler: mux,
 	}
 
 	// 4. Start server in goroutine

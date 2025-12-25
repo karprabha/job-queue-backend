@@ -21,11 +21,6 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		// continue with the request
 	}
 
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	responseData := HealthCheckResponse{
 		Status: "ok",
 	}
