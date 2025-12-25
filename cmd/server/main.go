@@ -10,6 +10,7 @@ import (
 	"time"
 
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
+	"github.com/karprabha/job-queue-backend/internal/store"
 )
 
 func main() {
@@ -21,32 +22,39 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// 2. Set up routes
-	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
-	mux.HandleFunc("POST /jobs", internalhttp.CreateJobHandler)
+	jobStore := store.NewInMemoryJobStore()
 
-	// 3. Create http.Server instance
+	jobHandler := internalhttp.NewJobHandler(jobStore)
+
+	// Health Route
+	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
+
+	// Job Routes
+	mux.HandleFunc("GET /jobs", jobHandler.GetJobs)
+	mux.HandleFunc("POST /jobs", jobHandler.CreateJob)
+
+	// Create http.Server instance
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
 	}
 
-	// 4. Start server in goroutine
+	// Start server in goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
-	// 5. Set up signal handling
+	// Set up signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// 6. Wait for shutdown signal
+	// Wait for shutdown signal
 	<-sigChan
 	log.Println("Shutting down...")
 
-	// 7. Graceful shutdown with timeout
+	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

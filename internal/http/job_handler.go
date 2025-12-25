@@ -8,20 +8,40 @@ import (
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/domain"
+	"github.com/karprabha/job-queue-backend/internal/store"
 )
+
+type JobHandler struct {
+	store store.JobStore
+}
+
+func NewJobHandler(store store.JobStore) *JobHandler {
+	return &JobHandler{
+		store: store,
+	}
+}
 
 type CreateJobRequest struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
 }
-type CreateJobResponse struct {
+type JobResponse struct {
 	ID        string `json:"id"`
 	Type      string `json:"type"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 }
 
-func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
+func jobToResponse(job *domain.Job) JobResponse {
+	return JobResponse{
+		ID:        job.ID,
+		Type:      job.Type,
+		Status:    string(job.Status),
+		CreatedAt: job.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1MB max
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -50,12 +70,13 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	job := domain.NewJob(request.Type, request.Payload)
 
-	response := CreateJobResponse{
-		ID:        job.ID,
-		Type:      job.Type,
-		Status:    string(job.Status),
-		CreatedAt: job.CreatedAt.Format(time.RFC3339),
+	err = h.store.CreateJob(r.Context(), job)
+	if err != nil {
+		ErrorResponse(w, "Failed to create job", http.StatusInternalServerError)
+		return
 	}
+
+	response := jobToResponse(job)
 
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
@@ -65,6 +86,32 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+
+	if _, err := w.Write(responseBytes); err != nil {
+		return
+	}
+}
+
+func (h *JobHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
+	jobs, err := h.store.GetJobs(r.Context())
+	if err != nil {
+		ErrorResponse(w, "Failed to get jobs", http.StatusInternalServerError)
+		return
+	}
+
+	response := make([]JobResponse, len(jobs))
+	for i, job := range jobs {
+		response[i] = jobToResponse(&job)
+	}
+
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		ErrorResponse(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
 		return
