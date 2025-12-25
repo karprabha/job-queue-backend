@@ -7,17 +7,19 @@ import (
 	"github.com/google/uuid"
 )
 
+type JobStatus string
+
+const (
+	StatusPending JobStatus = "pending"
+)
+
 type Job struct {
 	ID        string
 	Type      string
-	Status    string
+	Status    JobStatus
 	Payload   json.RawMessage
 	CreatedAt time.Time
 }
-
-const (
-	StatusPending = "pending"
-)
 
 func NewJob(jobType string, jobPayload json.RawMessage) *Job {
 	job := &Job{

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/domain"
@@ -11,7 +12,7 @@ import (
 
 type CreateJobRequest struct {
 	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"` // Accept any JSON
+	Payload json.RawMessage `json:"payload"`
 }
 type CreateJobResponse struct {
 	ID        string `json:"id"`
@@ -21,21 +22,29 @@ type CreateJobResponse struct {
 }
 
 func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1MB max
+
 	bodyBytes, err := io.ReadAll(r.Body)
 
 	if err != nil {
-		ErrorResponse(w, "Read failed", http.StatusInternalServerError)
+		// Detect if it's too large
+		if strings.Contains(err.Error(), "request body too large") {
+			ErrorResponse(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		ErrorResponse(w, "Failed to read request body", http.StatusInternalServerError)
 		return
 	}
 
 	var request CreateJobRequest
 	if err := json.Unmarshal(bodyBytes, &request); err != nil {
-		ErrorResponse(w, "Parse failed", http.StatusBadRequest)
+		ErrorResponse(w, "Failed to parse request body", http.StatusBadRequest)
 		return
 	}
 
 	if request.Type == "" {
-		ErrorResponse(w, "Job type is required", http.StatusBadRequest)
+		ErrorResponse(w, "Job type is required and must be non-empty", http.StatusBadRequest)
 		return
 	}
 
@@ -44,7 +53,7 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	response := CreateJobResponse{
 		ID:        job.ID,
 		Type:      job.Type,
-		Status:    job.Status,
+		Status:    string(job.Status),
 		CreatedAt: job.CreatedAt.Format(time.RFC3339),
 	}
 
@@ -58,7 +67,6 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 
 	if _, err := w.Write(responseBytes); err != nil {
-		ErrorResponse(w, "Failed to write response", http.StatusInternalServerError)
 		return
 	}
 }

@@ -7,9 +7,10 @@ import (
 
 func ErrorResponse(w http.ResponseWriter, message string, statusCode int) {
 	jsonBytes, err := json.Marshal(map[string]string{"error": message})
-
 	if err != nil {
-		http.Error(w, "Failed to marshal error response", statusCode)
+		// If we can't marshal, fall back to plain text error
+		// Headers haven't been written yet, so http.Error is safe
+		http.Error(w, "Failed to marshal error response", http.StatusInternalServerError)
 		return
 	}
 
@@ -17,7 +18,8 @@ func ErrorResponse(w http.ResponseWriter, message string, statusCode int) {
 	w.WriteHeader(statusCode)
 
 	if _, err := w.Write(jsonBytes); err != nil {
-		http.Error(w, "Failed to write error response", statusCode)
+		// Headers already written, can't send another response
+		// Client may have disconnected - just return
 		return
 	}
 }
