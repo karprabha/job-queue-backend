@@ -32,6 +32,15 @@ type JobResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
+func jobToResponse(job *domain.Job) JobResponse {
+	return JobResponse{
+		ID:        job.ID,
+		Type:      job.Type,
+		Status:    string(job.Status),
+		CreatedAt: job.CreatedAt.Format(time.RFC3339),
+	}
+}
+
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1MB max
 
@@ -67,12 +76,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := JobResponse{
-		ID:        job.ID,
-		Type:      job.Type,
-		Status:    string(job.Status),
-		CreatedAt: job.CreatedAt.Format(time.RFC3339),
-	}
+	response := jobToResponse(job)
 
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
@@ -91,18 +95,13 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 func (h *JobHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := h.store.GetJobs(r.Context())
 	if err != nil {
-		ErrorResponse(w, "Failed to get job", http.StatusInternalServerError)
+		ErrorResponse(w, "Failed to get jobs", http.StatusInternalServerError)
 		return
 	}
 
 	response := make([]JobResponse, len(jobs))
 	for i, job := range jobs {
-		response[i] = JobResponse{
-			ID:        job.ID,
-			Type:      job.Type,
-			Status:    string(job.Status),
-			CreatedAt: job.CreatedAt.Format(time.RFC3339),
-		}
+		response[i] = jobToResponse(&job)
 	}
 
 	responseBytes, err := json.Marshal(response)
