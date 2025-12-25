@@ -1,70 +1,53 @@
-# 🧱 Project: **Job Queue Backend (Go)**
+# Task 1 — Service Skeleton & Health Endpoint
 
-You are building a **production-grade backend service** that:
+## Objective
 
-- accepts jobs via HTTP
-- stores them
-- processes them asynchronously
-- exposes status & metrics
+Set up the initial Go service structure and implement a basic health check endpoint to validate that the server starts, responds to HTTP requests, and shuts down gracefully.
 
-This project will cover **almost all core Go backend concepts** over time.
+This task establishes the foundation for all future work.
 
 ---
 
-# 📌 RULES (very important)
+## Scope
 
-1. ❌ **Do not ask AI to write code**
-2. ✅ You may ask AI (or me) to:
-
-   - review code
-   - explain concepts
-   - point out non-idiomatic Go
-
-3. ❌ No frameworks initially (Gin, Fiber, Echo)
-4. ✅ Standard library first
-5. ❌ No “perfect code” mindset — ship ugly, then improve
+- Create a minimal but production-minded Go HTTP service
+- Implement a `GET /health` endpoint
+- Introduce a standard project layout
+- Add graceful shutdown handling
 
 ---
 
-# 🟢 TASK 1 — Service Skeleton + Health Check
+## Functional Requirements
 
-### 🎯 Goal
+### Health Endpoint
 
-Create a **minimal but production-minded Go HTTP service**.
-
----
-
-## Task Description
-
-Implement a Go HTTP server with a single endpoint:
-
-```
-GET /health
-```
-
-### Expected Response
-
-- HTTP status: `200`
-- JSON body:
-
-```json
-{
-  "status": "ok"
-}
-```
+- **Endpoint:** `GET /health`
+- **Response status:** `200 OK`
+- **Response body (JSON):**
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
+- **Content-Type:** `application/json`
 
 ---
 
-## Constraints (non-negotiable)
+## Technical Constraints
 
-### 1️⃣ Project structure
+### Language & Libraries
 
-You **must not** put everything in `main.go`.
+- **Language:** Go
+- **HTTP server:** `net/http` (standard library only)
+- **JSON handling:** `encoding/json`
+- **No third-party routing frameworks**
 
-Expected minimum structure (you can add more):
+### Project Structure
+
+At minimum, the project must follow this structure:
 
 ```
-jobqueue/
+job-queue-backend/
 ├── cmd/
 │   └── server/
 │       └── main.go
@@ -74,42 +57,36 @@ jobqueue/
 ├── go.mod
 ```
 
----
+**Requirements:**
 
-### 2️⃣ Server behavior
+- Do not put everything in `main.go`
+- Separate handlers from main application
+- Use `internal/` for private application code
 
-- Port must be configurable via environment variable
+### Server Configuration
+
+- HTTP port must be configurable via an environment variable
 - Default port: `8080`
-- Use `net/http`
-- Use `http.Server` (not `ListenAndServe` directly)
+- Use `http.Server` struct
+- Do not call `http.ListenAndServe` directly
 
----
+### Graceful Shutdown
 
-### 3️⃣ Graceful shutdown
+- Handle `SIGINT` and `SIGTERM`
+- Shutdown the HTTP server using context with timeout
+- In-flight requests must be allowed to complete
+- Do not ignore context cancellation
 
-- Handle `SIGINT` / `SIGTERM`
-- Shutdown server with timeout
-- Do **not** ignore context
+### Error Handling
 
----
-
-### 4️⃣ JSON handling
-
-- Proper `Content-Type`
-- Use `encoding/json`
-- No `fmt.Fprintf` hacks
-
----
-
-### 5️⃣ Error handling
-
-- No panics
+- No panics in server code
 - No ignored errors
-- Errors must be **handled or returned**
+- Errors must be handled or returned explicitly
+- Avoid `log.Fatal` except in `main` during startup failures
 
 ---
 
-## Explicit Non-Goals (do NOT implement)
+## Explicit Non-Goals
 
 - Logging framework
 - Middleware
@@ -119,57 +96,41 @@ jobqueue/
 
 ---
 
-## What I will review in your PR
+## Review Criteria
 
-I will **block the PR** if I see:
+**PR will be blocked if:**
 
-- God `main.go`
+- God `main.go` (all logic in main)
 - Global variables
 - `log.Fatal` everywhere
 - No context usage
 - Hardcoded port
 - Non-idiomatic naming
 
-I will comment on:
+**Will be commented on:**
 
 - Project layout
 - Handler design
 - Shutdown logic
 - Error handling style
-- Go idioms you missed
+- Go idioms
 
 ---
 
-## Deliverable
+## Definition of Done
 
-1. Create a GitHub repo
-2. Implement the task
-3. Open a PR:
+- `curl localhost:8080/health` returns `200 OK` with JSON response
+- Server shuts down cleanly with `Ctrl+C`
+- Code compiles with `go build ./...`
+- No linter errors
 
-   - `main` ← `feature/health-endpoint`
+---
 
-4. In PR description, answer:
+## Deliverables
 
+1. Feature branch: `feature/health-endpoint`
+2. Pull request into `main`
+3. PR description must include:
    - What felt confusing?
    - What felt ugly?
    - What are you unsure about?
-
----
-
-## Definition of “Done”
-
-- `curl localhost:8080/health` works
-- Server shuts down cleanly with `Ctrl+C`
-- Code compiles with `go build ./...`
-
----
-
-When you’re done:
-
-- Paste **repo link**
-- Paste **PR link**
-
-I’ll review it like a senior Go backend engineer and ask for changes.
-
-🚀
-Take your time. Write bad code. That’s the point.
