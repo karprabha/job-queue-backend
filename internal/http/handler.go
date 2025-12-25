@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 )
@@ -10,6 +11,17 @@ type HealthCheckResponse struct {
 }
 
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	select {
+	case <-ctx.Done():
+		http.Error(w, "Context cancelled", http.StatusInternalServerError)
+		return
+	default:
+		// continue with the request
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -19,13 +31,16 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		Status: "ok",
 	}
 
-	// Set headers BEFORE encoding
-	w.Header().Set("Content-Type", "application/json")
+	buffer := bytes.NewBuffer(nil)
+	encoder := json.NewEncoder(buffer)
 
-	// Encode directly - if it fails, http.Error can still set status
-	if err := json.NewEncoder(w).Encode(responseData); err != nil {
+	err := encoder.Encode(responseData)
+	if err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
-	// Status 200 is implicit if no error
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(buffer.Bytes())
 }

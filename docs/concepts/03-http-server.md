@@ -1,6 +1,7 @@
 # Understanding HTTP Server in Go
 
 ## Table of Contents
+
 1. [HTTP Server Basics](#http-server-basics)
 2. [http.Server vs http.ListenAndServe](#httpserver-vs-httplistenandserve)
 3. [HTTP Handlers Explained](#http-handlers-explained)
@@ -16,6 +17,7 @@
 ### What is an HTTP Server?
 
 An HTTP server is a program that:
+
 1. **Listens** on a network port (e.g., 8080)
 2. **Receives** HTTP requests from clients
 3. **Processes** the requests
@@ -51,12 +53,14 @@ http.ListenAndServe(":8080", nil)
 ```
 
 **What this does:**
+
 - Creates a server internally
 - Starts listening immediately
 - **Blocks forever** (never returns)
 - **No way to shut down gracefully**
 
 **Problems:**
+
 - Can't control shutdown
 - Can't set timeouts
 - Can't customize behavior
@@ -78,6 +82,7 @@ srv.Shutdown(ctx)
 ```
 
 **What this does:**
+
 - Creates a **server instance** we control
 - Can call methods on it (like `Shutdown()`)
 - Can set timeouts and other options
@@ -86,6 +91,7 @@ srv.Shutdown(ctx)
 ### Why http.Server is Better
 
 **http.Server struct fields:**
+
 ```go
 type Server struct {
     Addr         string        // Address to listen on
@@ -98,6 +104,7 @@ type Server struct {
 ```
 
 **Benefits:**
+
 - **Configurable** - Set timeouts, addresses, etc.
 - **Controllable** - Can call `Shutdown()` method
 - **Production-ready** - Handles edge cases
@@ -105,12 +112,12 @@ type Server struct {
 
 ### The Key Difference
 
-| Feature | http.ListenAndServe | http.Server |
-|---------|---------------------|-------------|
-| Control | None | Full control |
-| Shutdown | Impossible | `Shutdown()` method |
-| Configuration | Limited | Extensive |
-| Use case | Quick prototypes | Production code |
+| Feature       | http.ListenAndServe | http.Server         |
+| ------------- | ------------------- | ------------------- |
+| Control       | None                | Full control        |
+| Shutdown      | Impossible          | `Shutdown()` method |
+| Configuration | Limited             | Extensive           |
+| Use case      | Quick prototypes    | Production code     |
 
 ---
 
@@ -127,6 +134,7 @@ func Handler(w http.ResponseWriter, r *http.Request)
 ```
 
 **Parameters:**
+
 - `w http.ResponseWriter` - Used to write the response
 - `r *http.Request` - Contains the incoming request data
 
@@ -135,15 +143,18 @@ func Handler(w http.ResponseWriter, r *http.Request)
 ### Registering Handlers
 
 **Method 1: Using HandleFunc**
+
 ```go
 http.HandleFunc("/health", HealthCheckHandler)
 ```
 
 **What this does:**
+
 - Registers `HealthCheckHandler` to handle requests to `/health`
 - Uses Go's default multiplexer (`DefaultServeMux`)
 
 **Method 2: Using Handle (with custom types)**
+
 ```go
 type MyHandler struct{}
 
@@ -172,6 +183,7 @@ When a request comes in:
 ### http.Request (The Incoming Request)
 
 **What it contains:**
+
 - HTTP method (GET, POST, etc.)
 - URL path (`/health`)
 - Headers
@@ -180,6 +192,7 @@ When a request comes in:
 - Context (for cancellation)
 
 **Common fields we use:**
+
 ```go
 r.Method        // "GET", "POST", etc.
 r.URL.Path      // "/health"
@@ -190,11 +203,13 @@ r.Context()     // Request context (for cancellation)
 ### http.ResponseWriter (The Outgoing Response)
 
 **What it does:**
+
 - Writes HTTP status code
 - Sets response headers
 - Writes response body
 
 **Important methods:**
+
 ```go
 w.Header()                    // Get header map
 w.Header().Set("Key", "Val") // Set a header
@@ -207,6 +222,7 @@ w.Write([]byte("data"))       // Write body
 ### Response Writing Order
 
 **Correct order:**
+
 ```go
 // 1. Set headers first
 w.Header().Set("Content-Type", "application/json")
@@ -219,6 +235,7 @@ w.Write(data)
 ```
 
 **Wrong order:**
+
 ```go
 w.Write(data)  // This writes headers automatically!
 w.Header().Set("Content-Type", "application/json")  // Too late! ❌
@@ -241,18 +258,25 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
         Status: "ok",
     }
 
-    w.Header().Set("Content-Type", "application/json")
-
-    if err := json.NewEncoder(w).Encode(responseData); err != nil {
+    buffer := bytes.NewBuffer(nil)
+    encoder := json.NewEncoder(buffer)
+    encoder.SetIndent("", "  ")
+    err := encoder.Encode(responseData)
+    if err != nil {
         http.Error(w, "Failed to encode response", http.StatusInternalServerError)
         return
     }
+
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    w.Write(buffer.Bytes())
 }
 ```
 
 ### Line-by-Line Breakdown
 
 **Line 1: Function signature**
+
 ```go
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request)
 ```
@@ -262,6 +286,7 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request)
 - `r` - read request from here
 
 **Lines 2-6: Method validation**
+
 ```go
 if r.Method != http.MethodGet {
     http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -270,23 +295,28 @@ if r.Method != http.MethodGet {
 ```
 
 **What `r.Method` is:**
+
 - String containing HTTP method: `"GET"`, `"POST"`, `"PUT"`, etc.
 
 **What `http.MethodGet` is:**
+
 - Constant defined in Go: `"GET"`
 
 **Why we check:**
+
 - `/health` should only accept GET requests
 - POST, PUT, DELETE should be rejected
 - Returns `405 Method Not Allowed` for wrong methods
 
 **What `http.Error()` does:**
+
 - Sets status code
 - Sets `Content-Type: text/plain`
 - Writes error message to body
 - Convenient helper function
 
 **Lines 8-10: Create response data**
+
 ```go
 responseData := HealthCheckResponse{
     Status: "ok",
@@ -294,6 +324,7 @@ responseData := HealthCheckResponse{
 ```
 
 **What this is:**
+
 - Creating a struct instance
 - `HealthCheckResponse` is defined elsewhere:
   ```go
@@ -303,48 +334,91 @@ responseData := HealthCheckResponse{
   ```
 
 **JSON tags explained:**
+
 - `` `json:"status"` `` - Tells Go: "When encoding to JSON, use key 'status'"
 - Without tag, JSON key would be `"Status"` (capitalized)
 
 **Line 12: Set content type**
+
 ```go
 w.Header().Set("Content-Type", "application/json")
 ```
 
 **Why this matters:**
+
 - Tells client: "This response is JSON"
 - Browsers/APIs know how to parse it
 - **Must be set before writing body**
 
 **What `w.Header()` returns:**
+
 - A `Header` type (which is `map[string][]string`)
 - `Set()` method sets a header value
 - Headers are case-insensitive, but Go normalizes them
 
-**Lines 14-18: Encode and write JSON**
+**Lines 13-19: Encode to buffer first**
+
 ```go
-if err := json.NewEncoder(w).Encode(responseData); err != nil {
+buffer := bytes.NewBuffer(nil)
+encoder := json.NewEncoder(buffer)
+encoder.SetIndent("", "  ")
+err := encoder.Encode(responseData)
+if err != nil {
     http.Error(w, "Failed to encode response", http.StatusInternalServerError)
     return
 }
 ```
 
-**What `json.NewEncoder(w)` does:**
-- Creates a JSON encoder
-- Encoder writes directly to `w` (the response writer)
-- More efficient than encoding to memory first
+**What `bytes.NewBuffer(nil)` does:**
 
-**What `Encode(responseData)` does:**
+- Creates a new buffer (temporary storage)
+- `nil` means start with empty buffer
+- Buffer implements `io.Writer`, so encoder can write to it
+
+**What `json.NewEncoder(buffer)` does:**
+
+- Creates a JSON encoder
+- Encoder writes to the buffer (not the response writer)
+- This allows us to check for errors before writing to response
+
+**What `encoder.SetIndent("", "  ")` does:**
+
+- Makes JSON "pretty" (formatted with indentation)
+- First parameter: prefix for each line (empty = no prefix)
+- Second parameter: indentation string (`"  "` = 2 spaces)
+- **Note:** For production, you might remove this to save bandwidth
+
+**What `encoder.Encode(responseData)` does:**
+
 - Converts Go struct to JSON
-- Writes JSON directly to response
+- Writes JSON to the buffer (not response yet)
 - Returns error if encoding fails
 
-**Why error handling matters:**
-- JSON encoding can fail (rare, but possible)
-- If it fails, we can still set error status
-- This works because `Encode()` writes headers automatically if not set
+**Why buffer approach:**
+
+- Encoding happens to buffer first (not response writer)
+- If encoding fails, no headers/status written yet
+- `http.Error()` can successfully set 500 status
+- Only write to response if encoding succeeds
+- No risk of partial/corrupted responses
+
+**Lines 21-23: Write to response**
+
+```go
+w.Header().Set("Content-Type", "application/json")
+w.WriteHeader(http.StatusOK)
+w.Write(buffer.Bytes())
+```
+
+**What happens:**
+
+- Set content type header
+- Set status code to 200
+- Write the buffered JSON bytes to response
+- All happens only if encoding succeeded
 
 **Implicit status code:**
+
 - If no error, Go uses `200 OK` automatically
 - We don't need `w.WriteHeader(200)` explicitly
 
@@ -355,6 +429,7 @@ if err := json.NewEncoder(w).Encode(responseData); err != nil {
 ### The Problem We Solved
 
 **Original problematic code:**
+
 ```go
 w.WriteHeader(http.StatusOK)  // Set status to 200
 encoder := json.NewEncoder(w)
@@ -364,24 +439,51 @@ if err := encoder.Encode(&responseData); err != nil {
 ```
 
 **Why this is wrong:**
+
 - Status 200 already written
 - Can't change to 500 if encoding fails
 - Client sees 200 but might get partial/corrupted response
 
-**Our fixed code:**
+**❌ This approach has limitations:**
+
 ```go
 w.Header().Set("Content-Type", "application/json")  // Set header only
 if err := json.NewEncoder(w).Encode(responseData); err != nil {
-    http.Error(w, "Failed to encode response", http.StatusInternalServerError)  // ✅ Can still set 500
+    http.Error(w, "Failed to encode response", http.StatusInternalServerError)  // ❌ Too late!
     return
 }
-// Status 200 is implicit if no error
+```
+
+**Why this doesn't work:**
+
+- When `Encode()` writes to `w`, it automatically calls `WriteHeader(200)` before writing the JSON body
+- Once `WriteHeader()` is called, the status code cannot be changed
+- If encoding fails **after** writing starts, `http.Error()` cannot change the status to 500
+- Client might receive a 200 status with partial/corrupted JSON
+
+**✅ Correct approach (buffer pattern):**
+
+```go
+buffer := bytes.NewBuffer(nil)
+encoder := json.NewEncoder(buffer)
+err := encoder.Encode(responseData)
+if err != nil {
+    http.Error(w, "Failed to encode response", http.StatusInternalServerError)  // ✅ Can set 500
+    return
+}
+
+w.Header().Set("Content-Type", "application/json")
+w.WriteHeader(http.StatusOK)
+w.Write(buffer.Bytes())
 ```
 
 **Why this works:**
-- Headers set, but status not written yet
-- If encoding fails, `http.Error()` can set 500 status
-- If encoding succeeds, 200 is used automatically
+
+- Encoding happens to a buffer first (not the response writer)
+- If encoding fails, no headers/status have been written yet
+- `http.Error()` can successfully set 500 status
+- Only write to response if encoding succeeds
+- No risk of partial/corrupted responses
 
 ### http.Error() Explained
 
@@ -390,6 +492,7 @@ func Error(w ResponseWriter, error string, code int)
 ```
 
 **What it does:**
+
 1. Sets status code to `code`
 2. Sets `Content-Type: text/plain`
 3. Writes `error` string as body
@@ -410,11 +513,13 @@ func Error(w ResponseWriter, error string, code int)
 When you call `srv.Shutdown(ctx)`:
 
 **Step 1: Stop accepting new connections**
+
 ```
 New request arrives → Server rejects it
 ```
 
 **Step 2: Wait for existing requests**
+
 ```
 Request 1: Still processing... (wait)
 Request 2: Still processing... (wait)
@@ -422,12 +527,14 @@ Request 3: Finished ✅ (can close)
 ```
 
 **Step 3: Respect context timeout**
+
 ```
 If all requests finish in 2 seconds → Shutdown completes ✅
 If requests take 15 seconds → Context cancels → Shutdown stops ⏰
 ```
 
 **Step 4: Close connections**
+
 ```
 All connections closed
 Server stops
@@ -436,6 +543,7 @@ Server stops
 ### Why This Is "Graceful"
 
 **Ungraceful shutdown:**
+
 ```
 Server stops immediately
 ├─> Active requests: KILLED ❌
@@ -444,6 +552,7 @@ Server stops immediately
 ```
 
 **Graceful shutdown:**
+
 ```
 Server stops accepting new requests
 ├─> Active requests: ALLOWED TO FINISH ✅
@@ -454,12 +563,14 @@ Server stops accepting new requests
 ### The Timeout Purpose
 
 **Without timeout:**
+
 ```go
 srv.Shutdown(context.Background())  // Waits forever
 // If a request hangs, server never shuts down!
 ```
 
 **With timeout:**
+
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 srv.Shutdown(ctx)  // Waits max 10 seconds
@@ -468,6 +579,7 @@ srv.Shutdown(ctx)  // Waits max 10 seconds
 ```
 
 **Why 10 seconds?**
+
 - Enough time for most requests to finish
 - Not so long that shutdown feels stuck
 - Balances user experience with server availability
@@ -517,23 +629,27 @@ if err := doSomething(); err != nil {
 ## Common Mistakes
 
 ❌ **Writing body before headers**
+
 ```go
 w.Write(data)
 w.Header().Set("Content-Type", "application/json")  // Too late!
 ```
 
 ✅ **Set headers first**
+
 ```go
 w.Header().Set("Content-Type", "application/json")
 w.Write(data)
 ```
 
 ❌ **Ignoring encoding errors**
+
 ```go
 json.NewEncoder(w).Encode(data)  // What if this fails?
 ```
 
 ✅ **Handle encoding errors**
+
 ```go
 if err := json.NewEncoder(w).Encode(data); err != nil {
     http.Error(w, "Encoding failed", http.StatusInternalServerError)
@@ -542,11 +658,13 @@ if err := json.NewEncoder(w).Encode(data); err != nil {
 ```
 
 ❌ **Using http.ListenAndServe directly**
+
 ```go
 http.ListenAndServe(":8080", nil)  // Can't shut down!
 ```
 
 ✅ **Use http.Server**
+
 ```go
 srv := &http.Server{Addr: ":8080"}
 go srv.ListenAndServe()
@@ -560,4 +678,3 @@ go srv.ListenAndServe()
 - Understand [Context](./01-context.md) - How shutdown timeout works
 - Learn about [Goroutines](./02-goroutines-channels.md) - How server runs concurrently
 - Read [Signal Handling](./04-signal-handling.md) - How OS signals trigger shutdown
-
