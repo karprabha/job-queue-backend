@@ -59,7 +59,7 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		ErrorResponse(w, "Marshal failed", http.StatusInternalServerError)
+		ErrorResponse(w, "Failed to marshal response", http.StatusInternalServerError)
 		return
 	}
 
