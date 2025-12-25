@@ -9,7 +9,7 @@ import (
 )
 
 type JobStore interface {
-	CreateJob(ctx context.Context, job domain.Job) error
+	CreateJob(ctx context.Context, job *domain.Job) error
 	GetJobs(ctx context.Context) ([]domain.Job, error)
 }
 
@@ -21,11 +21,10 @@ type InMemoryJobStore struct {
 func NewInMemoryJobStore() *InMemoryJobStore {
 	return &InMemoryJobStore{
 		jobs: make(map[string]domain.Job),
-		mu:   sync.RWMutex{},
 	}
 }
 
-func (s *InMemoryJobStore) CreateJob(ctx context.Context, job domain.Job) error {
+func (s *InMemoryJobStore) CreateJob(ctx context.Context, job *domain.Job) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -35,7 +34,7 @@ func (s *InMemoryJobStore) CreateJob(ctx context.Context, job domain.Job) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.jobs[job.ID] = job
+	s.jobs[job.ID] = *job
 
 	return nil
 }

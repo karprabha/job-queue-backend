@@ -70,7 +70,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 
 	job := domain.NewJob(request.Type, request.Payload)
 
-	err = h.store.CreateJob(r.Context(), *job)
+	err = h.store.CreateJob(r.Context(), job)
 	if err != nil {
 		ErrorResponse(w, "Failed to create job", http.StatusInternalServerError)
 		return
