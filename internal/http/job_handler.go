@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/domain"
-	"github.com/karprabha/job-queue-backend/internal/utils"
 )
 
 type CreateJobRequest struct {
@@ -25,18 +24,18 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 
 	if err != nil {
-		utils.ErrorResponse(w, "Read failed", http.StatusInternalServerError)
+		ErrorResponse(w, "Read failed", http.StatusInternalServerError)
 		return
 	}
 
 	var request CreateJobRequest
 	if err := json.Unmarshal(bodyBytes, &request); err != nil {
-		utils.ErrorResponse(w, "Parse failed", http.StatusBadRequest)
+		ErrorResponse(w, "Parse failed", http.StatusBadRequest)
 		return
 	}
 
 	if request.Type == "" {
-		utils.ErrorResponse(w, "Job type is required", http.StatusBadRequest)
+		ErrorResponse(w, "Job type is required", http.StatusBadRequest)
 		return
 	}
 
@@ -51,15 +50,15 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		utils.ErrorResponse(w, "Marshal failed", http.StatusInternalServerError)
+		ErrorResponse(w, "Marshal failed", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 
 	if _, err := w.Write(responseBytes); err != nil {
-		utils.ErrorResponse(w, "Failed to write response", http.StatusInternalServerError)
+		ErrorResponse(w, "Failed to write response", http.StatusInternalServerError)
 		return
 	}
 }
