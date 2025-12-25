@@ -1,30 +1,32 @@
 package domain
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-type Payload struct {
-	To      string `json:"to"`
-	Subject string `json:"subject"`
-}
-
 type Job struct {
 	ID        string
 	Type      string
 	Status    string
+	Payload   json.RawMessage
 	CreatedAt time.Time
 }
 
-func NewJob(jobType string, jobPayload Payload) (*Job, error) {
+const (
+	StatusPending = "pending"
+)
+
+func NewJob(jobType string, jobPayload json.RawMessage) *Job {
 	job := &Job{
 		ID:        uuid.New().String(),
 		Type:      jobType,
-		Status:    "pending",
-		CreatedAt: time.Now(),
+		Status:    StatusPending,
+		Payload:   jobPayload,
+		CreatedAt: time.Now().UTC(),
 	}
 
-	return job, nil
+	return job
 }

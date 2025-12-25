@@ -3,6 +3,8 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/karprabha/job-queue-backend/internal/utils"
 )
 
 type HealthCheckResponse struct {
@@ -10,31 +12,20 @@ type HealthCheckResponse struct {
 }
 
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	select {
-	case <-ctx.Done():
-		http.Error(w, "Context cancelled", http.StatusInternalServerError)
-		return
-	default:
-		// continue with the request
-	}
-
 	responseData := HealthCheckResponse{
 		Status: "ok",
 	}
 
 	jsonBytes, err := json.Marshal(responseData)
 	if err != nil {
-		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		utils.ErrorResponse(w, "Failed to marshal response", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 
 	if _, err := w.Write(jsonBytes); err != nil {
-		http.Error(w, "Failed to write response", http.StatusInternalServerError)
+		utils.ErrorResponse(w, "Failed to write response", http.StatusInternalServerError)
 		return
 	}
 }
