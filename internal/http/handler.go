@@ -37,6 +37,9 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(jsonBytes)
+
+	if _, err := w.Write(jsonBytes); err != nil {
+		http.Error(w, "Failed to write response", http.StatusInternalServerError)
+		return
+	}
 }
