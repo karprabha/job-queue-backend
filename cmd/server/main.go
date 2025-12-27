@@ -6,59 +6,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/karprabha/job-queue-backend/internal/config"
 	"github.com/karprabha/job-queue-backend/internal/domain"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
 	"github.com/karprabha/job-queue-backend/internal/store"
 	"github.com/karprabha/job-queue-backend/internal/worker"
 )
 
-type Config struct {
-	Port             string
-	JobQueueCapacity int
-	WorkerCount      int
-}
-
-func NewConfig() *Config {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	jobQueueCapacity := os.Getenv("JOB_QUEUE_CAPACITY")
-	if jobQueueCapacity == "" {
-		jobQueueCapacity = "100"
-	}
-
-	workerCount := os.Getenv("WORKER_COUNT")
-	if workerCount == "" {
-		workerCount = "10"
-	}
-
-	workerCountInt, err := strconv.Atoi(workerCount)
-	if err != nil {
-		workerCountInt = 10
-	}
-
-	jobQueueCapacityInt, err := strconv.Atoi(jobQueueCapacity)
-	if err != nil {
-		jobQueueCapacityInt = 100
-	}
-
-	return &Config{
-		Port:             port,
-		JobQueueCapacity: jobQueueCapacityInt,
-		WorkerCount:      workerCountInt,
-	}
-}
-
 func main() {
-	// 1. Read port from env
-	config := NewConfig()
+	config := config.NewConfig()
 
 	jobStore := store.NewInMemoryJobStore()
 
@@ -70,9 +30,9 @@ func main() {
 	var wg sync.WaitGroup
 
 	for i := 0; i < config.WorkerCount; i++ {
-		worker := worker.NewWorker(jobStore, jobQueue)
+		worker := worker.NewWorker(i, jobStore, jobQueue)
 		wg.Go(func() {
-			worker.Start(workerCtx, i)
+			worker.Start(workerCtx)
 		})
 	}
 
