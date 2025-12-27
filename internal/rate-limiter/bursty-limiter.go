@@ -11,7 +11,7 @@ type BurstyLimiter struct {
 	tokens   chan time.Time
 }
 
-func NewBurstyLimiter(capacity int, rate time.Duration) *BurstyLimiter {
+func NewBurstyLimiter(ctx context.Context, capacity int, rate time.Duration) *BurstyLimiter {
 	tokens := make(chan time.Time, capacity)
 
 	// Fill initial burst
@@ -19,10 +19,20 @@ func NewBurstyLimiter(capacity int, rate time.Duration) *BurstyLimiter {
 		tokens <- time.Now()
 	}
 
-	// Refill tokens at the specified rate
+	ticker := time.NewTicker(rate)
+
 	go func() {
-		for t := range time.Tick(rate) {
-			tokens <- t
+		defer ticker.Stop()
+		for {
+			select {
+			case t := <-ticker.C:
+				select {
+				case tokens <- t: // try to add token
+				default: // channel full, skip
+				}
+			case <-ctx.Done():
+				return // exit goroutine if context is canceled
+			}
 		}
 	}()
 

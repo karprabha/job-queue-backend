@@ -77,7 +77,10 @@ func main() {
 
 	jobQueue := make(chan *domain.Job, config.JobQueueCapacity)
 
-	burstyLimiter := ratelimiter.NewBurstyLimiter(config.JobQueueCapacity, config.RateLimit)
+	rateLimitCtx, rateLimitCancel := context.WithCancel(context.Background())
+	defer rateLimitCancel()
+
+	burstyLimiter := ratelimiter.NewBurstyLimiter(rateLimitCtx, config.JobQueueCapacity, config.RateLimit)
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
@@ -123,18 +126,23 @@ func main() {
 	<-sigChan
 	log.Println("Shutting down...")
 
-	// Cancel the context to stop the worker
-	workerCancel()
-	wg.Wait()
-	close(jobQueue)
-
-	// Graceful shutdown with timeout
+	// 1. Shutdown HTTP server first (stops accepting new requests, waits for in-flight)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server shutdown error: %v", err)
 	}
+
+	// 2. NOW close the job queue (no more requests can enqueue)
+	close(jobQueue)
+
+	// 3. Cancel workers and wait
+	workerCancel()
+	wg.Wait()
+
+	// 4. Cancel rate limit context
+	rateLimitCancel()
 
 	log.Println("Server stopped")
 }
