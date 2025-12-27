@@ -13,7 +13,6 @@ import (
 
 	"github.com/karprabha/job-queue-backend/internal/domain"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
-	ratelimiter "github.com/karprabha/job-queue-backend/internal/rate-limiter"
 	"github.com/karprabha/job-queue-backend/internal/store"
 	"github.com/karprabha/job-queue-backend/internal/worker"
 )
@@ -22,7 +21,6 @@ type Config struct {
 	Port             string
 	JobQueueCapacity int
 	WorkerCount      int
-	RateLimit        time.Duration
 }
 
 func NewConfig() *Config {
@@ -51,21 +49,10 @@ func NewConfig() *Config {
 		jobQueueCapacityInt = 100
 	}
 
-	rateLimit := os.Getenv("RATE_LIMIT")
-	if rateLimit == "" {
-		rateLimit = "100ms"
-	}
-
-	rateLimitDuration, err := time.ParseDuration(rateLimit)
-	if err != nil {
-		rateLimitDuration = 100 * time.Millisecond
-	}
-
 	return &Config{
 		Port:             port,
 		JobQueueCapacity: jobQueueCapacityInt,
 		WorkerCount:      workerCountInt,
-		RateLimit:        rateLimitDuration,
 	}
 }
 
@@ -76,11 +63,6 @@ func main() {
 	jobStore := store.NewInMemoryJobStore()
 
 	jobQueue := make(chan *domain.Job, config.JobQueueCapacity)
-
-	rateLimitCtx, rateLimitCancel := context.WithCancel(context.Background())
-	defer rateLimitCancel()
-
-	burstyLimiter := ratelimiter.NewBurstyLimiter(rateLimitCtx, config.JobQueueCapacity, config.RateLimit)
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
@@ -96,7 +78,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	jobHandler := internalhttp.NewJobHandler(jobStore, jobQueue, burstyLimiter)
+	jobHandler := internalhttp.NewJobHandler(jobStore, jobQueue)
 
 	// Health Route
 	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
@@ -140,9 +122,6 @@ func main() {
 	// 3. Cancel workers and wait
 	workerCancel()
 	wg.Wait()
-
-	// 4. Cancel rate limit context
-	rateLimitCancel()
 
 	log.Println("Server stopped")
 }
