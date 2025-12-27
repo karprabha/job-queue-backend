@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -12,12 +13,14 @@ import (
 )
 
 type JobHandler struct {
-	store store.JobStore
+	store    store.JobStore
+	jobQueue chan *domain.Job
 }
 
-func NewJobHandler(store store.JobStore) *JobHandler {
+func NewJobHandler(store store.JobStore, jobQueue chan *domain.Job) *JobHandler {
 	return &JobHandler{
-		store: store,
+		store:    store,
+		jobQueue: jobQueue,
 	}
 }
 
@@ -73,6 +76,17 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	err = h.store.CreateJob(r.Context(), job)
 	if err != nil {
 		ErrorResponse(w, "Failed to create job", http.StatusInternalServerError)
+		return
+	}
+
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case h.jobQueue <- job:
+	case <-timer.C:
+		log.Printf("Warning: Job queue full, job %s may be delayed", job.ID)
+	case <-r.Context().Done():
 		return
 	}
 

@@ -414,3 +414,183 @@ For comprehensive explanations, see:
 - [Task 3 Summary](./task3/summary.md) - Quick reference
 - [Task 3 README](./task3/README.md) - Complete overview
 - [Task 3 Concepts Documentation](./task3/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 4 — Background Worker & Job Processing Loop
+
+### Quick Setup Commands
+
+- No new dependencies needed (uses standard library: `sync`, `context`, `time`)
+
+### Worker Pattern (Memorize This)
+
+```go
+// 1. Create worker with dependencies
+worker := worker.NewWorker(jobStore, jobQueue)
+
+// 2. Create context for cancellation
+workerCtx, workerCancel := context.WithCancel(context.Background())
+defer workerCancel()
+
+// 3. Start worker in goroutine with WaitGroup
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+    defer wg.Done()
+    worker.Start(workerCtx)
+}()
+
+// 4. On shutdown
+workerCancel()  // Cancel context
+wg.Wait()       // Wait for worker to finish
+close(jobQueue) // Close channel
+```
+
+### Channel Setup Pattern
+
+```go
+// Create buffered channel
+const jobQueueCapacity = 100
+jobQueue := make(chan *domain.Job, jobQueueCapacity)
+
+// Send job (in handler)
+select {
+case jobQueue <- job:
+    // Successfully enqueued
+case <-time.After(100 * time.Millisecond):
+    log.Printf("Warning: Job queue full")
+case <-r.Context().Done():
+    return
+}
+
+// Receive job (in worker)
+select {
+case <-ctx.Done():
+    return
+case job, ok := <-jobQueue:
+    if !ok {
+        return  // Channel closed
+    }
+    // Process job
+}
+```
+
+### Worker Implementation Pattern
+
+```go
+type Worker struct {
+    jobStore store.JobStore
+    jobQueue chan *domain.Job
+}
+
+func (w *Worker) Start(ctx context.Context) {
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case job, ok := <-w.jobQueue:
+            if !ok {
+                return
+            }
+            // Claim job atomically
+            claimed, err := w.jobStore.ClaimJob(ctx, job.ID)
+            if err != nil || !claimed {
+                continue
+            }
+            // Process job
+            w.processJob(ctx, job)
+        }
+    }
+}
+
+func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
+    timer := time.NewTimer(1 * time.Second)
+    defer timer.Stop()
+
+    select {
+    case <-timer.C:
+        // Processing complete
+        w.updateJobStatus(ctx, job, domain.StatusCompleted)
+    case <-ctx.Done():
+        // Shutdown requested
+        w.updateJobStatus(ctx, job, domain.StatusFailed)
+        return
+    }
+}
+```
+
+### Atomic Claiming Pattern
+
+```go
+func (s *InMemoryJobStore) ClaimJob(ctx context.Context, jobID string) (bool, error) {
+    // Check context before lock
+    select {
+    case <-ctx.Done():
+        return false, ctx.Err()
+    default:
+    }
+
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    job, ok := s.jobs[jobID]
+    if !ok || job.Status != domain.StatusPending {
+        return false, nil
+    }
+
+    // Atomically update status
+    job.Status = domain.StatusProcessing
+    s.jobs[jobID] = job
+
+    return true, nil
+}
+```
+
+### Graceful Shutdown Pattern
+
+```go
+// 1. Wait for shutdown signal
+<-sigChan
+log.Println("Shutting down...")
+
+// 2. Cancel worker context
+workerCancel()
+
+// 3. Wait for worker to finish
+wg.Wait()
+
+// 4. Close channel (safe now)
+close(jobQueue)
+
+// 5. Shutdown HTTP server with timeout
+shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer shutdownCancel()
+srv.Shutdown(shutdownCtx)
+```
+
+### Important Concepts
+
+- **Goroutines**: Lightweight threads for background processing
+- **Channels**: Thread-safe communication between goroutines
+- **Buffered Channels**: Can queue values, decouples sender/receiver
+- **Worker Pattern**: Background goroutine processes work from channel
+- **Context Cancellation**: Standard way to signal shutdown
+- **WaitGroup**: Tracks goroutine completion
+- **Atomic Operations**: ClaimJob prevents race conditions
+- **Select Statement**: Wait for multiple channels simultaneously
+- **Graceful Shutdown**: Finish current work before exiting
+
+### Project Structure
+
+- `internal/worker/` - Worker package separated from HTTP
+- Channel-based communication - No polling, efficient
+- Clear separation: HTTP → Worker → Store → Domain
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 4 Summary](./task4/summary.md) - Quick reference
+- [Task 4 README](./task4/README.md) - Complete overview
+- [Task 4 Concepts Documentation](./task4/concepts/README.md) - Detailed concept explanations

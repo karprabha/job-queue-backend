@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/karprabha/job-queue-backend/internal/domain"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
 	"github.com/karprabha/job-queue-backend/internal/store"
+	"github.com/karprabha/job-queue-backend/internal/worker"
 )
 
 func main() {
@@ -20,11 +23,25 @@ func main() {
 		port = "8080"
 	}
 
-	mux := http.NewServeMux()
+	const jobQueueCapacity = 100
 
 	jobStore := store.NewInMemoryJobStore()
 
-	jobHandler := internalhttp.NewJobHandler(jobStore)
+	jobQueue := make(chan *domain.Job, jobQueueCapacity)
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+
+	worker := worker.NewWorker(jobStore, jobQueue)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		worker.Start(workerCtx)
+	})
+
+	mux := http.NewServeMux()
+
+	jobHandler := internalhttp.NewJobHandler(jobStore, jobQueue)
 
 	// Health Route
 	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
@@ -54,12 +71,17 @@ func main() {
 	<-sigChan
 	log.Println("Shutting down...")
 
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Cancel the context to stop the worker
+	workerCancel()
+	wg.Wait()
+	close(jobQueue)
 
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Shutdown error: %v", err)
+	// Graceful shutdown with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Server shutdown error: %v", err)
 	}
 
 	log.Println("Server stopped")
