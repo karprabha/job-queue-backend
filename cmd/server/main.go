@@ -23,9 +23,11 @@ func main() {
 		port = "8080"
 	}
 
+	const jobQueueCapacity = 100
+
 	jobStore := store.NewInMemoryJobStore()
 
-	jobQueue := make(chan *domain.Job, 100)
+	jobQueue := make(chan *domain.Job, jobQueueCapacity)
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()

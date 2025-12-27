@@ -55,12 +55,16 @@ func (w *Worker) updateJobStatus(ctx context.Context, job *domain.Job, status do
 }
 
 func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
+	timer := time.NewTimer(1 * time.Second)
+	defer timer.Stop()
+
 	select {
-	case <-time.After(1 * time.Second):
+	case <-timer.C:
 		// Processing complete
 	case <-ctx.Done():
 		// Shutdown requested, abort processing
 		log.Printf("Job %s processing aborted due to shutdown", job.ID)
+		w.updateJobStatus(ctx, job, domain.StatusFailed)
 		return
 	}
 

@@ -79,15 +79,14 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+
 	select {
 	case h.jobQueue <- job:
-		// Successfully enqueued
-	case <-time.After(100 * time.Millisecond):
-		// Queue full, but job is already created in store
-		// Log warning - job exists but may not be processed immediately
+	case <-timer.C:
 		log.Printf("Warning: Job queue full, job %s may be delayed", job.ID)
 	case <-r.Context().Done():
-		// Client disconnected
 		return
 	}
 
