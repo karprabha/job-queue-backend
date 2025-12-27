@@ -9,18 +9,21 @@ import (
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/domain"
+	ratelimiter "github.com/karprabha/job-queue-backend/internal/rate-limiter"
 	"github.com/karprabha/job-queue-backend/internal/store"
 )
 
 type JobHandler struct {
-	store    store.JobStore
-	jobQueue chan *domain.Job
+	store         store.JobStore
+	jobQueue      chan *domain.Job
+	burstyLimiter *ratelimiter.BurstyLimiter
 }
 
-func NewJobHandler(store store.JobStore, jobQueue chan *domain.Job) *JobHandler {
+func NewJobHandler(store store.JobStore, jobQueue chan *domain.Job, burstyLimiter *ratelimiter.BurstyLimiter) *JobHandler {
 	return &JobHandler{
-		store:    store,
-		jobQueue: jobQueue,
+		store:         store,
+		jobQueue:      jobQueue,
+		burstyLimiter: burstyLimiter,
 	}
 }
 
@@ -45,6 +48,12 @@ func jobToResponse(job *domain.Job) JobResponse {
 }
 
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
+	err := h.burstyLimiter.Take(r.Context())
+	if err != nil {
+		ErrorResponse(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1MB max
 
 	bodyBytes, err := io.ReadAll(r.Body)
