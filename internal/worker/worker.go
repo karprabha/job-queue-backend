@@ -21,40 +21,45 @@ func NewWorker(jobStore store.JobStore, jobQueue chan *domain.Job) *Worker {
 	}
 }
 
-func (w *Worker) Start(ctx context.Context) {
+func (w *Worker) Start(ctx context.Context, id int) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Worker %d shutting down", id)
 			return
 		case job, ok := <-w.jobQueue:
 			if !ok {
+				log.Printf("Worker %d shutting down because job queue is closed", id)
 				return
 			}
 			claimed, err := w.jobStore.ClaimJob(ctx, job.ID)
 			if err != nil {
-				log.Printf("Error claiming job: %s: %v", job.ID, err)
+				log.Printf("Worker %d error claiming job: %s: %v", id, job.ID, err)
 				continue
 			}
 
 			if !claimed {
+				log.Printf("Worker %d job %s not claimed", id, job.ID)
 				continue
 			}
 
-			w.processJob(ctx, job)
+			log.Printf("Worker %d processing job %s", id, job.ID)
+			w.processJob(ctx, job, id)
 		}
 	}
 }
 
-func (w *Worker) updateJobStatus(ctx context.Context, job *domain.Job, status domain.JobStatus) {
+func (w *Worker) updateJobStatus(ctx context.Context, job *domain.Job, status domain.JobStatus, id int) {
 	job.Status = status
 	err := w.jobStore.UpdateJob(ctx, job)
 	if err != nil {
-		log.Printf("Error updating job: %s: %v", job.ID, err)
+		log.Printf("Worker %d error updating job: %s: %v", id, job.ID, err)
 		return
 	}
+	log.Printf("Worker %d job %s completed", id, job.ID)
 }
 
-func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
+func (w *Worker) processJob(ctx context.Context, job *domain.Job, id int) {
 	timer := time.NewTimer(1 * time.Second)
 	defer timer.Stop()
 
@@ -63,10 +68,9 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		// Processing complete
 	case <-ctx.Done():
 		// Shutdown requested, abort processing
-		log.Printf("Job %s processing aborted due to shutdown", job.ID)
-		w.updateJobStatus(ctx, job, domain.StatusFailed)
+		log.Printf("Worker %d job %s processing aborted due to shutdown", id, job.ID)
 		return
 	}
 
-	w.updateJobStatus(ctx, job, domain.StatusCompleted)
+	w.updateJobStatus(ctx, job, domain.StatusCompleted, id)
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -16,28 +17,64 @@ import (
 	"github.com/karprabha/job-queue-backend/internal/worker"
 )
 
-func main() {
-	// 1. Read port from env
+type Config struct {
+	Port             string
+	JobQueueCapacity int
+	WorkerCount      int
+}
+
+func NewConfig() *Config {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	const jobQueueCapacity = 100
+	jobQueueCapacity := os.Getenv("JOB_QUEUE_CAPACITY")
+	if jobQueueCapacity == "" {
+		jobQueueCapacity = "100"
+	}
+
+	workerCount := os.Getenv("WORKER_COUNT")
+	if workerCount == "" {
+		workerCount = "10"
+	}
+
+	workerCountInt, err := strconv.Atoi(workerCount)
+	if err != nil {
+		workerCountInt = 10
+	}
+
+	jobQueueCapacityInt, err := strconv.Atoi(jobQueueCapacity)
+	if err != nil {
+		jobQueueCapacityInt = 100
+	}
+
+	return &Config{
+		Port:             port,
+		JobQueueCapacity: jobQueueCapacityInt,
+		WorkerCount:      workerCountInt,
+	}
+}
+
+func main() {
+	// 1. Read port from env
+	config := NewConfig()
 
 	jobStore := store.NewInMemoryJobStore()
 
-	jobQueue := make(chan *domain.Job, jobQueueCapacity)
+	jobQueue := make(chan *domain.Job, config.JobQueueCapacity)
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 
-	worker := worker.NewWorker(jobStore, jobQueue)
-
 	var wg sync.WaitGroup
-	wg.Go(func() {
-		worker.Start(workerCtx)
-	})
+
+	for i := 0; i < config.WorkerCount; i++ {
+		worker := worker.NewWorker(jobStore, jobQueue)
+		wg.Go(func() {
+			worker.Start(workerCtx, i)
+		})
+	}
 
 	mux := http.NewServeMux()
 
@@ -52,7 +89,7 @@ func main() {
 
 	// Create http.Server instance
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + config.Port,
 		Handler: mux,
 	}
 
