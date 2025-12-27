@@ -594,3 +594,196 @@ For comprehensive explanations, see:
 - [Task 4 Summary](./task4/summary.md) - Quick reference
 - [Task 4 README](./task4/README.md) - Complete overview
 - [Task 4 Concepts Documentation](./task4/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 5 — Multiple Workers & Controlled Concurrency
+
+### Quick Setup Commands
+
+- `WORKER_COUNT=20 go run ./cmd/server` - Run with 20 workers
+- `JOB_QUEUE_CAPACITY=200 go run ./cmd/server` - Run with larger queue
+- `PORT=3000 WORKER_COUNT=10 go run ./cmd/server` - Custom configuration
+
+### Worker Pool Pattern (Memorize This)
+
+```go
+var wg sync.WaitGroup
+
+for i := 0; i < config.WorkerCount; i++ {
+    worker := worker.NewWorker(i, jobStore, jobQueue)
+    wg.Go(func() {
+        worker.Start(workerCtx)
+    })
+}
+
+// Shutdown
+workerCancel()
+wg.Wait()
+```
+
+### Configuration Pattern
+
+```go
+// Environment variables with defaults
+port := os.Getenv("PORT")
+if port == "" {
+    port = "8080"
+}
+
+workerCount := os.Getenv("WORKER_COUNT")
+if workerCount == "" {
+    workerCount = "10"
+}
+
+workerCountInt, err := strconv.Atoi(workerCount)
+if err != nil {
+    workerCountInt = 10  // Default on error
+}
+```
+
+### Proper Shutdown Order (Critical!)
+
+```go
+// 1. Shutdown HTTP server first (stops accepting new requests)
+shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer shutdownCancel()
+srv.Shutdown(shutdownCtx)
+
+// 2. Close job queue (no more requests can enqueue)
+close(jobQueue)
+
+// 3. Cancel workers and wait
+workerCancel()
+wg.Wait()
+```
+
+**Why this order?** Prevents "send on closed channel" panics!
+
+### Key Patterns Learned
+
+#### Worker Pool Creation
+
+```go
+// Modern pattern (Go 1.21+)
+var wg sync.WaitGroup
+
+for i := 0; i < config.WorkerCount; i++ {
+    worker := worker.NewWorker(i, jobStore, jobQueue)
+    wg.Go(func() {
+        worker.Start(workerCtx)
+    })
+}
+```
+
+#### ClaimJob Pattern (Prevents Duplicates)
+
+```go
+// Worker receives job from channel
+job := <-w.jobQueue
+
+// Try to claim atomically
+claimed, err := w.jobStore.ClaimJob(ctx, job.ID)
+if err != nil {
+    continue  // Skip on error
+}
+
+if !claimed {
+    continue  // Another worker got it first
+}
+
+// We successfully claimed it, process it
+w.processJob(ctx, job)
+```
+
+#### Configuration Package
+
+```go
+type Config struct {
+    Port             string
+    JobQueueCapacity int
+    WorkerCount      int
+}
+
+func NewConfig() *Config {
+    // Read from environment, provide defaults
+    // Handle errors gracefully
+    return &Config{...}
+}
+```
+
+### Important Concepts
+
+- **Worker Pools**: Multiple workers processing concurrently
+- **Fan-Out Pattern**: One channel, multiple workers (automatic load balancing)
+- **ClaimJob**: Atomic check-and-set prevents duplicate processing
+- **Configuration Management**: Environment variables with defaults
+- **Proper Shutdown Order**: Server → Channel → Workers (prevents panics)
+- **Modern WaitGroup**: `wg.Go()` (Go 1.21+) automatically handles Add/Done
+- **Closure Variable Capture**: Always be aware of what closures capture
+- **Store as Source of Truth**: Channel is notification, store is authoritative
+
+### Project Structure
+
+- `internal/config/` - Configuration management
+- Worker pool in `main.go` - Multiple workers created in loop
+- Worker IDs - Each worker has unique identifier for logging
+
+### Critical Bugs to Avoid
+
+#### 1. Closure Variable Capture
+```go
+// ❌ BAD: All workers get same ID
+for i := 0; i < 10; i++ {
+    wg.Go(func() {
+        worker.Start(workerCtx, i)  // i is 10 for all!
+    })
+}
+
+// ✅ GOOD: Worker created before closure
+for i := 0; i < 10; i++ {
+    worker := worker.NewWorker(i, jobStore, jobQueue)
+    wg.Go(func() {
+        worker.Start(workerCtx)  // Captures worker instance
+    })
+}
+```
+
+#### 2. Send on Closed Channel
+```go
+// ❌ BAD: Channel closed before server shutdown
+close(jobQueue)
+srv.Shutdown(ctx)  // Handler might panic!
+
+// ✅ GOOD: Server shutdown first
+srv.Shutdown(ctx)
+close(jobQueue)
+```
+
+#### 3. WaitGroup Add Outside Loop (Traditional Pattern)
+```go
+// ❌ BAD: Only tracks 1 worker
+wg.Add(1)
+for i := 0; i < 10; i++ {
+    go func() { ... }()
+}
+
+// ✅ GOOD: Modern pattern (Go 1.21+)
+for i := 0; i < 10; i++ {
+    wg.Go(func() { ... })  // Automatically handles Add/Done
+}
+```
+
+### Performance Impact
+
+- **Single Worker**: 100 jobs = 100 seconds
+- **10 Workers**: 100 jobs = 10 seconds
+- **10x improvement** in throughput!
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 5 Summary](./task5/summary.md) - Quick reference
+- [Task 5 README](./task5/README.md) - Complete overview
+- [Task 5 Concepts Documentation](./task5/concepts/README.md) - Detailed concept explanations

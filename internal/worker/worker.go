@@ -10,12 +10,14 @@ import (
 )
 
 type Worker struct {
+	id       int
 	jobStore store.JobStore
 	jobQueue chan *domain.Job
 }
 
-func NewWorker(jobStore store.JobStore, jobQueue chan *domain.Job) *Worker {
+func NewWorker(id int, jobStore store.JobStore, jobQueue chan *domain.Job) *Worker {
 	return &Worker{
+		id:       id,
 		jobStore: jobStore,
 		jobQueue: jobQueue,
 	}
@@ -25,21 +27,25 @@ func (w *Worker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Worker %d shutting down", w.id)
 			return
 		case job, ok := <-w.jobQueue:
 			if !ok {
+				log.Printf("Worker %d shutting down because job queue is closed", w.id)
 				return
 			}
 			claimed, err := w.jobStore.ClaimJob(ctx, job.ID)
 			if err != nil {
-				log.Printf("Error claiming job: %s: %v", job.ID, err)
+				log.Printf("Worker %d error claiming job: %s: %v", w.id, job.ID, err)
 				continue
 			}
 
 			if !claimed {
+				log.Printf("Worker %d job %s not claimed", w.id, job.ID)
 				continue
 			}
 
+			log.Printf("Worker %d processing job %s", w.id, job.ID)
 			w.processJob(ctx, job)
 		}
 	}
@@ -49,9 +55,10 @@ func (w *Worker) updateJobStatus(ctx context.Context, job *domain.Job, status do
 	job.Status = status
 	err := w.jobStore.UpdateJob(ctx, job)
 	if err != nil {
-		log.Printf("Error updating job: %s: %v", job.ID, err)
+		log.Printf("Worker %d error updating job: %s: %v", w.id, job.ID, err)
 		return
 	}
+	log.Printf("Worker %d job %s updated to %s", w.id, job.ID, status)
 }
 
 func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
@@ -63,8 +70,7 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		// Processing complete
 	case <-ctx.Done():
 		// Shutdown requested, abort processing
-		log.Printf("Job %s processing aborted due to shutdown", job.ID)
-		w.updateJobStatus(ctx, job, domain.StatusFailed)
+		log.Printf("Worker %d job %s processing aborted due to shutdown", w.id, job.ID)
 		return
 	}
 

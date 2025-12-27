@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/karprabha/job-queue-backend/internal/config"
 	"github.com/karprabha/job-queue-backend/internal/domain"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
 	"github.com/karprabha/job-queue-backend/internal/store"
@@ -17,27 +18,23 @@ import (
 )
 
 func main() {
-	// 1. Read port from env
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	const jobQueueCapacity = 100
+	config := config.NewConfig()
 
 	jobStore := store.NewInMemoryJobStore()
 
-	jobQueue := make(chan *domain.Job, jobQueueCapacity)
+	jobQueue := make(chan *domain.Job, config.JobQueueCapacity)
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 
-	worker := worker.NewWorker(jobStore, jobQueue)
-
 	var wg sync.WaitGroup
-	wg.Go(func() {
-		worker.Start(workerCtx)
-	})
+
+	for i := 0; i < config.WorkerCount; i++ {
+		worker := worker.NewWorker(i, jobStore, jobQueue)
+		wg.Go(func() {
+			worker.Start(workerCtx)
+		})
+	}
 
 	mux := http.NewServeMux()
 
@@ -52,7 +49,7 @@ func main() {
 
 	// Create http.Server instance
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + config.Port,
 		Handler: mux,
 	}
 
@@ -71,18 +68,20 @@ func main() {
 	<-sigChan
 	log.Println("Shutting down...")
 
-	// Cancel the context to stop the worker
-	workerCancel()
-	wg.Wait()
-	close(jobQueue)
-
-	// Graceful shutdown with timeout
+	// 1. Shutdown HTTP server first (stops accepting new requests, waits for in-flight)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server shutdown error: %v", err)
 	}
+
+	// 2. NOW close the job queue (no more requests can enqueue)
+	close(jobQueue)
+
+	// 3. Cancel workers and wait
+	workerCancel()
+	wg.Wait()
 
 	log.Println("Server stopped")
 }
