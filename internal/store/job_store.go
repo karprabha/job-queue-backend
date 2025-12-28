@@ -80,6 +80,7 @@ func (s *InMemoryJobStore) ClaimJob(ctx context.Context, jobID string) (*domain.
 	}
 
 	job.Status = domain.StatusProcessing
+	job.Attempts++
 	s.jobs[jobID] = job
 
 	jobCopy := job

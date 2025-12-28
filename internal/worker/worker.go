@@ -74,5 +74,20 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		return
 	}
 
-	w.updateJobStatus(ctx, job.ID, domain.StatusCompleted)
+	if job.Type != "email" {
+		// success
+		w.updateJobStatus(ctx, job.ID, domain.StatusCompleted)
+		return
+	}
+
+	// simulate failure
+	if job.Attempts < job.MaxRetries {
+		w.updateJobStatus(ctx, job.ID, domain.StatusPending)
+		// requeue job
+		w.jobQueue <- job.ID
+		return
+	}
+
+	log.Printf("Worker %d job %s failed after %d attempts", w.id, job.ID, job.Attempts)
+	w.updateJobStatus(ctx, job.ID, domain.StatusFailed)
 }
