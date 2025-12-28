@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/config"
-	"github.com/karprabha/job-queue-backend/internal/domain"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
 	"github.com/karprabha/job-queue-backend/internal/store"
 	"github.com/karprabha/job-queue-backend/internal/worker"
@@ -22,7 +21,7 @@ func main() {
 
 	jobStore := store.NewInMemoryJobStore()
 
-	jobQueue := make(chan *domain.Job, config.JobQueueCapacity)
+	jobQueue := make(chan string, config.JobQueueCapacity)
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()

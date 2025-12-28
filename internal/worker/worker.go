@@ -12,10 +12,10 @@ import (
 type Worker struct {
 	id       int
 	jobStore store.JobStore
-	jobQueue chan *domain.Job
+	jobQueue chan string
 }
 
-func NewWorker(id int, jobStore store.JobStore, jobQueue chan *domain.Job) *Worker {
+func NewWorker(id int, jobStore store.JobStore, jobQueue chan string) *Worker {
 	return &Worker{
 		id:       id,
 		jobStore: jobStore,
@@ -29,36 +29,36 @@ func (w *Worker) Start(ctx context.Context) {
 		case <-ctx.Done():
 			log.Printf("Worker %d shutting down", w.id)
 			return
-		case job, ok := <-w.jobQueue:
+		case jobID, ok := <-w.jobQueue:
 			if !ok {
 				log.Printf("Worker %d shutting down because job queue is closed", w.id)
 				return
 			}
-			claimed, err := w.jobStore.ClaimJob(ctx, job.ID)
+			job, err := w.jobStore.ClaimJob(ctx, jobID)
+
 			if err != nil {
-				log.Printf("Worker %d error claiming job: %s: %v", w.id, job.ID, err)
+				log.Printf("Worker %d error claiming job: %s: %v", w.id, jobID, err)
 				continue
 			}
 
-			if !claimed {
-				log.Printf("Worker %d job %s not claimed", w.id, job.ID)
+			if job == nil {
+				log.Printf("Worker %d job %s already claimed or invalid", w.id, jobID)
 				continue
 			}
 
-			log.Printf("Worker %d processing job %s", w.id, job.ID)
+			log.Printf("Worker %d processing job %s", w.id, jobID)
 			w.processJob(ctx, job)
 		}
 	}
 }
 
-func (w *Worker) updateJobStatus(ctx context.Context, job *domain.Job, status domain.JobStatus) {
-	job.Status = status
-	err := w.jobStore.UpdateJob(ctx, job)
+func (w *Worker) updateJobStatus(ctx context.Context, jobID string, status domain.JobStatus) {
+	err := w.jobStore.UpdateStatus(ctx, jobID, status)
 	if err != nil {
-		log.Printf("Worker %d error updating job: %s: %v", w.id, job.ID, err)
+		log.Printf("Worker %d error updating job: %s: %v", w.id, jobID, err)
 		return
 	}
-	log.Printf("Worker %d job %s updated to %s", w.id, job.ID, status)
+	log.Printf("Worker %d job %s updated to %s", w.id, jobID, status)
 }
 
 func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
@@ -74,5 +74,5 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		return
 	}
 
-	w.updateJobStatus(ctx, job, domain.StatusCompleted)
+	w.updateJobStatus(ctx, job.ID, domain.StatusCompleted)
 }

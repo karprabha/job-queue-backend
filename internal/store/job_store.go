@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 
@@ -11,8 +12,8 @@ import (
 type JobStore interface {
 	CreateJob(ctx context.Context, job *domain.Job) error
 	GetJobs(ctx context.Context) ([]domain.Job, error)
-	UpdateJob(ctx context.Context, job *domain.Job) error
-	ClaimJob(ctx context.Context, jobID string) (bool, error)
+	ClaimJob(ctx context.Context, jobID string) (*domain.Job, error)
+	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus) error
 }
 
 type InMemoryJobStore struct {
@@ -63,7 +64,30 @@ func (s *InMemoryJobStore) GetJobs(ctx context.Context) ([]domain.Job, error) {
 	return jobs, nil
 }
 
-func (s *InMemoryJobStore) UpdateJob(ctx context.Context, job *domain.Job) error {
+func (s *InMemoryJobStore) ClaimJob(ctx context.Context, jobID string) (*domain.Job, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[jobID]
+	if !ok || job.Status != domain.StatusPending {
+		return nil, nil
+	}
+
+	job.Status = domain.StatusProcessing
+	s.jobs[jobID] = job
+
+	jobCopy := job
+
+	return &jobCopy, nil
+}
+
+func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -73,28 +97,13 @@ func (s *InMemoryJobStore) UpdateJob(ctx context.Context, job *domain.Job) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.jobs[job.ID] = *job
-
-	return nil
-}
-
-func (s *InMemoryJobStore) ClaimJob(ctx context.Context, jobID string) (bool, error) {
-	select {
-	case <-ctx.Done():
-		return false, ctx.Err()
-	default:
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	job, ok := s.jobs[jobID]
-	if !ok || job.Status != domain.StatusPending {
-		return false, nil
+	if !ok {
+		return errors.New("job not found in store")
 	}
 
-	job.Status = domain.StatusProcessing
+	job.Status = status
 	s.jobs[jobID] = job
 
-	return true, nil
+	return nil
 }
