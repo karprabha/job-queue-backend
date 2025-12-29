@@ -186,10 +186,7 @@ func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	for jobID, job := range s.jobs {
-		if job.Status == domain.StatusFailed &&
-			job.Attempts < job.MaxRetries &&
-			canTransition(job.Status, domain.StatusPending) {
-
+		if job.Status == domain.StatusFailed && job.Attempts < job.MaxRetries {
 			job.Status = domain.StatusPending
 			s.jobs[jobID] = job
 		}

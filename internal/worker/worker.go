@@ -70,7 +70,7 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		lastError := "Email sending failed"
 		err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &lastError)
 		if err != nil {
-			log.Printf("Worker %d error updating job to completed: %s: %v", w.id, job.ID, err)
+			log.Printf("Worker %d error updating job to failed: %s: %v", w.id, job.ID, err)
 			return
 		}
 		log.Printf("Worker %d job %s failed", w.id, job.ID)
