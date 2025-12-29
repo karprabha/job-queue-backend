@@ -67,7 +67,8 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 
 	// Simulate failure deterministically
 	if job.Type == "email" {
-		err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed)
+		lastError := "Email sending failed"
+		err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &lastError)
 		if err != nil {
 			log.Printf("Worker %d error updating job to completed: %s: %v", w.id, job.ID, err)
 			return
@@ -77,7 +78,7 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 	}
 
 	// Success - mark as completed
-	err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusCompleted)
+	err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusCompleted, nil)
 	if err != nil {
 		log.Printf("Worker %d error updating job to completed: %s: %v", w.id, job.ID, err)
 		return

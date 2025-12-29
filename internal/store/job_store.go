@@ -13,7 +13,7 @@ type JobStore interface {
 	CreateJob(ctx context.Context, job *domain.Job) error
 	GetJobs(ctx context.Context) ([]domain.Job, error)
 	ClaimJob(ctx context.Context, jobID string) (*domain.Job, error)
-	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus) error
+	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus, lastError *string) error
 	GetFailedJobs(ctx context.Context) ([]domain.Job, error)
 	GetPendingJobs(ctx context.Context) ([]domain.Job, error)
 	RetryFailedJobs(ctx context.Context) error
@@ -106,7 +106,7 @@ func (s *InMemoryJobStore) ClaimJob(ctx context.Context, jobID string) (*domain.
 	return &jobCopy, nil
 }
 
-func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus) error {
+func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus, lastError *string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -128,6 +128,10 @@ func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, statu
 
 	job.Status = status
 	s.jobs[jobID] = job
+
+	if lastError != nil {
+		job.LastError = lastError
+	}
 
 	return nil
 }
@@ -183,7 +187,10 @@ func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	for jobID, job := range s.jobs {
-		if job.Status == domain.StatusFailed && job.Attempts < job.MaxRetries {
+		if job.Status == domain.StatusFailed &&
+			job.Attempts < job.MaxRetries &&
+			canTransition(job.Status, domain.StatusPending) {
+
 			job.Status = domain.StatusPending
 			s.jobs[jobID] = job
 		}
