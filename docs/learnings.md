@@ -1591,3 +1591,279 @@ For comprehensive explanations, see:
 - [Task 8 Summary](./task8/summary.md) - Quick reference
 - [Task 8 README](./task8/README.md) - Complete overview
 - [Task 8 Concepts Documentation](./task8/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 9 — Persistence Boundary & Startup Recovery
+
+### Quick Setup Commands
+
+- No new dependencies needed (uses standard library: `context`, `fmt`, `log/slog`, `time`)
+
+### Startup Recovery Pattern (Memorize This)
+
+```go
+// 1. Initialize store
+jobStore := store.NewInMemoryJobStore()
+
+// 2. Initialize queue (needed for recovery)
+jobQueue := make(chan string, config.JobQueueCapacity)
+
+// 3. Run recovery logic (BEFORE workers start)
+recoveryCtx := context.Background()
+if err := recovery.RecoverJobs(recoveryCtx, jobStore, jobQueue, logger); err != nil {
+    log.Fatalf("Recovery failed: %v", err)
+}
+
+// 4. Start workers (after recovery)
+for i := 0; i < config.WorkerCount; i++ {
+    worker := worker.NewWorker(...)
+    wg.Go(func() {
+        worker.Start(workerCtx)
+    })
+}
+
+// 5. Start HTTP server
+go func() {
+    srv.ListenAndServe()
+}()
+```
+
+### Recovery Function Pattern
+
+```go
+func RecoverJobs(
+    ctx context.Context,
+    jobStore store.JobStore,
+    jobQueue chan string,
+    logger *slog.Logger,
+) error {
+    // Step 1: Move processing jobs back to pending
+    processingJobs, err := jobStore.GetProcessingJobs(ctx)
+    if err != nil {
+        return fmt.Errorf("failed to get processing jobs: %w", err)
+    }
+
+    for _, job := range processingJobs {
+        jobStore.UpdateStatus(ctx, job.ID, domain.StatusPending, nil)
+    }
+
+    // Step 2: Re-enqueue all pending jobs
+    pendingJobs, err := jobStore.GetPendingJobs(ctx)
+    if err != nil {
+        return fmt.Errorf("failed to get pending jobs: %w", err)
+    }
+
+    for _, job := range pendingJobs {
+        reEnqueueWithBackpressure(ctx, job.ID, jobQueue, logger)
+    }
+
+    return nil
+}
+```
+
+### Recovery Backpressure Pattern
+
+```go
+func reEnqueueWithBackpressure(
+    ctx context.Context,
+    jobID string,
+    jobQueue chan string,
+    logger *slog.Logger,
+) error {
+    backoff := 50 * time.Millisecond
+    maxBackoff := 5 * time.Second
+    maxAttempts := 10
+
+    for attempt := 0; attempt < maxAttempts; attempt++ {
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        case jobQueue <- jobID:
+            return nil // Success!
+        default:
+            if attempt < maxAttempts-1 {
+                select {
+                case <-ctx.Done():
+                    return ctx.Err()
+                case <-time.After(backoff):
+                    backoff = time.Duration(float64(backoff) * 1.5)
+                    if backoff > maxBackoff {
+                        backoff = maxBackoff
+                    }
+                }
+            }
+        }
+    }
+
+    return fmt.Errorf("failed to enqueue job %s after %d attempts", jobID, maxAttempts)
+}
+```
+
+### Key Patterns Learned
+
+#### Recovery Package Structure
+
+```go
+// internal/recovery/recovery.go
+package recovery
+
+func RecoverJobs(
+    ctx context.Context,
+    jobStore store.JobStore,
+    jobQueue chan string,
+    logger *slog.Logger,
+) error {
+    // Recovery logic
+}
+```
+
+**Key points:**
+- Recovery logic in separate package
+- Not part of HTTP or workers
+- Clear separation of concerns
+
+#### GetProcessingJobs Method
+
+```go
+// In JobStore interface
+GetProcessingJobs(ctx context.Context) ([]domain.Job, error)
+
+// Implementation
+func (s *InMemoryJobStore) GetProcessingJobs(ctx context.Context) ([]domain.Job, error) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    jobs := make([]domain.Job, 0, len(s.jobs))
+    for _, job := range s.jobs {
+        if job.Status == domain.StatusProcessing {
+            jobs = append(jobs, job)
+        }
+    }
+    return jobs, nil
+}
+```
+
+**Key points:**
+- Finds all jobs stuck in processing state
+- Used by recovery to find interrupted jobs
+- Read-only operation (RLock)
+
+#### State Transition for Recovery
+
+```go
+func canTransition(from, to domain.JobStatus) bool {
+    switch {
+    // ... existing transitions ...
+    case from == domain.StatusProcessing && to == domain.StatusPending:
+        return true // ← ADDED for recovery
+    default:
+        return false
+    }
+}
+```
+
+**Key points:**
+- Allows processing → pending for recovery
+- Only used during recovery
+- Normal flow doesn't use this transition
+
+### Important Concepts
+
+- **Startup Recovery**: Restore system state when application restarts
+- **Source of Truth**: Store is authoritative, queue is delivery mechanism
+- **Recovery Backpressure**: Handle queue full during recovery with exponential backoff
+- **State Transitions**: Recovery must use same validation rules
+- **Startup Order**: Recovery must complete before workers start
+- **Never Drop Jobs**: Retry with backoff, don't fail immediately
+- **Error Wrapping**: Use `fmt.Errorf("...: %w", err)` for error chains
+
+### Project Structure
+
+- `internal/recovery/` - Recovery package separated
+- Recovery logic in dedicated package
+- Store methods for recovery (GetProcessingJobs)
+- State transition rules updated
+
+### Critical Bugs to Avoid
+
+#### 1. Workers Start Before Recovery
+
+```go
+// ❌ BAD: Workers start first
+for i := 0; i < config.WorkerCount; i++ {
+    worker.Start(workerCtx)
+}
+recovery.RecoverJobs(ctx, jobStore, jobQueue, logger)
+
+// ✅ GOOD: Recovery first
+recovery.RecoverJobs(ctx, jobStore, jobQueue, logger)
+for i := 0; i < config.WorkerCount; i++ {
+    worker.Start(workerCtx)
+}
+```
+
+#### 2. Dropping Jobs During Recovery
+
+```go
+// ❌ BAD: Drop jobs if queue full
+select {
+case jobQueue <- job.ID:
+    // Success
+default:
+    continue  // Skip job!
+}
+
+// ✅ GOOD: Retry with backpressure
+reEnqueueWithBackpressure(ctx, job.ID, jobQueue, logger)
+```
+
+#### 3. Bypassing State Transitions
+
+```go
+// ❌ BAD: Direct mutation
+job.Status = domain.StatusPending
+s.jobs[jobID] = job
+
+// ✅ GOOD: Use UpdateStatus
+jobStore.UpdateStatus(ctx, job.ID, domain.StatusPending, nil)
+```
+
+#### 4. Not Handling Processing Jobs
+
+```go
+// ❌ BAD: Only re-enqueue pending
+pendingJobs, _ := jobStore.GetPendingJobs(ctx)
+for _, job := range pendingJobs {
+    jobQueue <- job.ID
+}
+// Processing jobs ignored!
+
+// ✅ GOOD: Move processing to pending first
+processingJobs, _ := jobStore.GetProcessingJobs(ctx)
+for _, job := range processingJobs {
+    jobStore.UpdateStatus(ctx, job.ID, domain.StatusPending, nil)
+}
+// Then re-enqueue all pending
+```
+
+### Performance Impact
+
+**Recovery Behavior:**
+- Recovery completes before workers start
+- All recoverable jobs re-enqueued
+- No jobs dropped during recovery
+- Exponential backoff handles queue full
+
+**Startup Time:**
+- Recovery adds minimal startup time
+- System ready after recovery completes
+- Workers start processing immediately after
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 9 Summary](./task9/summary.md) - Quick reference
+- [Task 9 README](./task9/README.md) - Complete overview
+- [Task 9 Concepts Documentation](./task9/concepts/README.md) - Detailed concept explanations
