@@ -127,11 +127,10 @@ func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, statu
 	}
 
 	job.Status = status
-	s.jobs[jobID] = job
-
 	if lastError != nil {
 		job.LastError = lastError
 	}
+	s.jobs[jobID] = job
 
 	return nil
 }
