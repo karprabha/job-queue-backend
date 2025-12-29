@@ -85,8 +85,6 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	default:
-		ErrorResponse(w, "Too many requests", http.StatusTooManyRequests)
-		return
 	}
 
 	response := jobToResponse(job)

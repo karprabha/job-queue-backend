@@ -67,26 +67,12 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 
 	// Simulate failure deterministically
 	if job.Type == "email" {
-		// Signal failure to store
-		shouldRetry, err := w.jobStore.MarkJobFailed(ctx, job.ID, "simulated failure for email job type")
+		err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed)
 		if err != nil {
-			log.Printf("Worker %d error marking job failed: %s: %v", w.id, job.ID, err)
+			log.Printf("Worker %d error updating job to completed: %s: %v", w.id, job.ID, err)
 			return
 		}
-
-		if shouldRetry {
-			// Store has already set it back to pending, re-enqueue
-			select {
-			case w.jobQueue <- job.ID:
-				log.Printf("Worker %d re-queued job %s for retry (attempt %d/%d)", w.id, job.ID, job.Attempts+1, job.MaxRetries)
-			case <-ctx.Done():
-				log.Printf("Worker %d context cancelled while re-queuing job %s", w.id, job.ID)
-			default:
-				log.Printf("Worker %d job queue full, job %s will be picked up later", w.id, job.ID)
-			}
-		} else {
-			log.Printf("Worker %d job %s permanently failed after %d attempts", w.id, job.ID, job.Attempts)
-		}
+		log.Printf("Worker %d job %s failed", w.id, job.ID)
 		return
 	}
 

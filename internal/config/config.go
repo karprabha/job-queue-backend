@@ -3,12 +3,14 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
 	Port             string
 	JobQueueCapacity int
 	WorkerCount      int
+	SweeperInterval  time.Duration
 }
 
 func NewConfig() *Config {
@@ -27,6 +29,16 @@ func NewConfig() *Config {
 		workerCount = "10"
 	}
 
+	sweeperInterval := os.Getenv("SWEEPER_INTERVAL")
+	if sweeperInterval == "" {
+		sweeperInterval = "10s"
+	}
+
+	sweeperIntervalDuration, err := time.ParseDuration(sweeperInterval)
+	if err != nil {
+		sweeperIntervalDuration = 10 * time.Second
+	}
+
 	workerCountInt, err := strconv.Atoi(workerCount)
 	if err != nil {
 		workerCountInt = 10
@@ -41,5 +53,6 @@ func NewConfig() *Config {
 		Port:             port,
 		JobQueueCapacity: jobQueueCapacityInt,
 		WorkerCount:      workerCountInt,
+		SweeperInterval:  sweeperIntervalDuration,
 	}
 }

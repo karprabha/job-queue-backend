@@ -14,7 +14,9 @@ type JobStore interface {
 	GetJobs(ctx context.Context) ([]domain.Job, error)
 	ClaimJob(ctx context.Context, jobID string) (*domain.Job, error)
 	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus) error
-	MarkJobFailed(ctx context.Context, jobID string, errMsg string) (shouldRetry bool, retryErr error) // Add this
+	GetFailedJobs(ctx context.Context) ([]domain.Job, error)
+	GetPendingJobs(ctx context.Context) ([]domain.Job, error)
+	RetryFailedJobs(ctx context.Context) error
 }
 
 type InMemoryJobStore struct {
@@ -130,34 +132,62 @@ func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, statu
 	return nil
 }
 
-func (s *InMemoryJobStore) MarkJobFailed(ctx context.Context, jobID string, errMsg string) (shouldRetry bool, retryErr error) {
+func (s *InMemoryJobStore) GetFailedJobs(ctx context.Context) ([]domain.Job, error) {
 	select {
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return nil, ctx.Err()
+	default:
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobs := make([]domain.Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if job.Status == domain.StatusFailed {
+			jobs = append(jobs, job)
+		}
+	}
+
+	return jobs, nil
+}
+
+func (s *InMemoryJobStore) GetPendingJobs(ctx context.Context) ([]domain.Job, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobs := make([]domain.Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if job.Status == domain.StatusPending {
+			jobs = append(jobs, job)
+		}
+	}
+
+	return jobs, nil
+}
+
+func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	default:
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	job, ok := s.jobs[jobID]
-	if !ok {
-		return false, errors.New("job not found")
+	for jobID, job := range s.jobs {
+		if job.Status == domain.StatusFailed && job.Attempts < job.MaxRetries {
+			job.Status = domain.StatusPending
+			s.jobs[jobID] = job
+		}
 	}
 
-	if job.Status != domain.StatusProcessing {
-		return false, errors.New("job is not in processing state")
-	}
-
-	job.Status = domain.StatusFailed
-	job.LastError = &errMsg
-	s.jobs[jobID] = job
-
-	if job.Attempts < job.MaxRetries {
-		job.Status = domain.StatusPending
-		s.jobs[jobID] = job
-		return true, nil
-	}
-
-	return false, nil
+	return nil
 }
