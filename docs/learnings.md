@@ -1079,3 +1079,258 @@ For comprehensive explanations, see:
 - [Task 6 Summary](./task6/summary.md) - Quick reference
 - [Task 6 README](./task6/README.md) - Complete overview
 - [Task 6 Concepts Documentation](./task6/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 7 — Observability: Structured Logging & Metrics
+
+### Quick Setup Commands
+
+- No new dependencies needed (uses standard library: `log/slog`)
+
+### Structured Logging Pattern (Memorize This)
+
+```go
+// 1. Create logger in main
+logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+// 2. Inject logger into components
+type JobHandler struct {
+    logger *slog.Logger
+}
+
+func NewJobHandler(logger *slog.Logger) *JobHandler {
+    return &JobHandler{logger: logger}
+}
+
+// 3. Use structured logging with event names
+func (h *JobHandler) CreateJob(...) {
+    h.logger.Info("Job created", "event", "job_created", "job_id", jobID)
+}
+```
+
+### Metrics Collection Pattern
+
+```go
+// 1. Create metric store in main
+metricStore := store.NewInMemoryMetricStore()
+
+// 2. Inject into components
+type JobHandler struct {
+    metricStore store.MetricStore
+}
+
+// 3. Update metrics (not directly, through store)
+func (h *JobHandler) CreateJob(...) {
+    h.metricStore.IncrementJobsCreated(ctx)
+}
+```
+
+### Metrics Store Pattern
+
+```go
+type InMemoryMetricStore struct {
+    mu      sync.RWMutex
+    metrics *domain.Metric
+}
+
+func (s *InMemoryMetricStore) GetMetrics(ctx context.Context) (*domain.Metric, error) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+    
+    // Return a copy to prevent external mutation
+    m := *s.metrics
+    return &m, nil
+}
+
+func (s *InMemoryMetricStore) IncrementJobsCreated(ctx context.Context) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    
+    s.metrics.TotalJobsCreated++
+    return nil
+}
+```
+
+### Event-Based Logging Pattern
+
+```go
+// Every log includes event name
+logger.Info("Job created", "event", "job_created", "job_id", jobID)
+logger.Info("Job started", "event", "job_started", "worker_id", workerID, "job_id", jobID)
+logger.Info("Job completed", "event", "job_completed", "worker_id", workerID, "job_id", jobID)
+logger.Error("Failed to process", "event", "job_process_error", "error", err)
+```
+
+### Metrics Endpoint Pattern
+
+```go
+func (h *MetricHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
+    metrics, err := h.metricStore.GetMetrics(r.Context())
+    if err != nil {
+        ErrorResponse(w, "Failed to get metrics", http.StatusInternalServerError)
+        return
+    }
+    
+    response := MetricResponse{
+        TotalJobsCreated: metrics.TotalJobsCreated,
+        JobsCompleted:    metrics.JobsCompleted,
+        JobsFailed:       metrics.JobsFailed,
+        JobsRetried:      metrics.JobsRetried,
+        JobsInProgress:   metrics.JobsInProgress,
+    }
+    
+    responseBytes, _ := json.Marshal(response)
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    w.Write(responseBytes)
+}
+```
+
+### Key Patterns Learned
+
+#### Logger Initialization
+
+```go
+// In main.go
+logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+// Inject into all components
+jobHandler := internalhttp.NewJobHandler(jobStore, metricStore, logger, jobQueue)
+worker := worker.NewWorker(workerID, jobStore, metricStore, logger, jobQueue)
+```
+
+#### Structured Logging
+
+```go
+// Info level - normal events
+logger.Info("Job created", "event", "job_created", "job_id", jobID)
+
+// Error level - errors
+logger.Error("Failed to create job", "event", "job_create_error", "error", err)
+
+// Always include event name
+// Use consistent field naming (snake_case)
+```
+
+#### Metrics Updates
+
+```go
+// Counter - only increments
+metricStore.IncrementJobsCreated(ctx)
+
+// Gauge - increments and decrements
+metricStore.IncrementJobsInProgress(ctx)  // When job starts
+metricStore.IncrementJobsCompleted(ctx)   // Decrements in_progress inside
+```
+
+#### Returning Copies
+
+```go
+// ❌ BAD: Returns pointer to internal state
+return s.metrics  // External code can mutate!
+
+// ✅ GOOD: Returns copy
+m := *s.metrics  // Copy
+return &m, nil   // Return pointer to copy
+```
+
+### Important Concepts
+
+- **Structured Logging**: Key-value pairs instead of free-form text
+- **Event-Based Logging**: Every log includes event name for searchability
+- **Metrics Collection**: Numerical measurements of system behavior
+- **Dependency Injection**: Pass logger and metrics, don't use globals
+- **Concurrency Safety**: Mutex protection for shared metrics
+- **Encapsulation**: Return copies to prevent external mutation
+- **Counter vs Gauge**: Counters only increment, gauges increment/decrement
+- **RWMutex**: Allows concurrent reads, exclusive writes
+
+### Project Structure
+
+- `internal/domain/metric.go` - Metric domain model
+- `internal/store/metric_store.go` - Metrics storage separated
+- `internal/http/metric_handler.go` - Metrics endpoint handler
+- Logger and metrics injected throughout
+
+### Critical Bugs to Avoid
+
+#### 1. Global Logger
+```go
+// ❌ BAD: Global logger
+var logger = slog.Default()
+
+func handler() {
+    logger.Info("message")
+}
+
+// ✅ GOOD: Injected logger
+type Handler struct {
+    logger *slog.Logger
+}
+
+func NewHandler(logger *slog.Logger) *Handler {
+    return &Handler{logger: logger}
+}
+```
+
+#### 2. Returning Pointer to Internal State
+```go
+// ❌ BAD: Returns pointer to internal state
+func (s *MetricStore) GetMetrics() *Metric {
+    return s.metrics  // External code can mutate!
+}
+
+// ✅ GOOD: Returns copy
+func (s *MetricStore) GetMetrics(ctx context.Context) (*Metric, error) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+    m := *s.metrics  // Copy
+    return &m, nil
+}
+```
+
+#### 3. Updating Metrics from Handlers
+```go
+// ❌ BAD: Handler directly updates metrics
+func (h *Handler) CreateJob() {
+    h.metrics.JobsCreated++  // Direct mutation!
+}
+
+// ✅ GOOD: Handler calls metric store
+func (h *Handler) CreateJob() {
+    h.metricStore.IncrementJobsCreated(ctx)  // Store handles it
+}
+```
+
+#### 4. Missing Event Names
+```go
+// ❌ BAD: No event name
+logger.Info("Job created", "job_id", jobID)
+
+// ✅ GOOD: With event name
+logger.Info("Job created", "event", "job_created", "job_id", jobID)
+```
+
+#### 5. Inconsistent Field Naming
+```go
+// ❌ BAD: Mixed naming
+logger.Info("Job created", "jobId", id, "worker_id", wid)
+
+// ✅ GOOD: Consistent snake_case
+logger.Info("Job created", "event", "job_created", "job_id", id, "worker_id", wid)
+```
+
+### Performance Impact
+
+- **Logging**: Structured logs slightly slower, but worth it for observability
+- **Metrics**: Minimal overhead (mutex locks are fast)
+- **Memory**: In-memory storage is very efficient
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 7 Summary](./task7/summary.md) - Quick reference
+- [Task 7 README](./task7/README.md) - Complete overview
+- [Task 7 Concepts Documentation](./task7/concepts/README.md) - Detailed concept explanations
