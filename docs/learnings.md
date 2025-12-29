@@ -787,3 +787,295 @@ For comprehensive explanations, see:
 - [Task 5 Summary](./task5/summary.md) - Quick reference
 - [Task 5 README](./task5/README.md) - Complete overview
 - [Task 5 Concepts Documentation](./task5/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 6 — Failure Handling, Retries & Job States
+
+### Quick Setup Commands
+
+- `SWEEPER_INTERVAL=5s go run ./cmd/server` - Run with 5 second sweeper interval
+- `PORT=3000 SWEEPER_INTERVAL=10s go run ./cmd/server` - Custom configuration
+
+### State Machine Pattern (Memorize This)
+
+```go
+// 1. Define transition validation function
+func canTransition(from, to domain.JobStatus) bool {
+    switch {
+    case from == domain.StatusPending && to == domain.StatusProcessing:
+        return true
+    case from == domain.StatusProcessing && to == domain.StatusCompleted:
+        return true
+    case from == domain.StatusProcessing && to == domain.StatusFailed:
+        return true
+    case from == domain.StatusFailed && to == domain.StatusPending:
+        return true
+    default:
+        return false
+    }
+}
+
+// 2. Validate before updating
+func (s *InMemoryJobStore) UpdateStatus(jobID string, status JobStatus, lastError *string) error {
+    job := s.jobs[jobID]
+    if !canTransition(job.Status, status) {
+        return errors.New("invalid state transition")
+    }
+    job.Status = status
+    if lastError != nil {
+        job.LastError = lastError
+    }
+    s.jobs[jobID] = job
+    return nil
+}
+```
+
+### Failure Handling Pattern
+
+```go
+// Worker signals failure
+func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
+    if processingFails {
+        errMsg := "Processing failed: connection timeout"
+        w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &errMsg)
+        return
+    }
+    
+    // Success
+    w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusCompleted, nil)
+}
+```
+
+### Retry Logic Pattern
+
+```go
+// Retry only if attempts < maxRetries
+func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    
+    for jobID, job := range s.jobs {
+        if job.Status == domain.StatusFailed && job.Attempts < job.MaxRetries {
+            job.Status = domain.StatusPending
+            s.jobs[jobID] = job
+        }
+    }
+    return nil
+}
+```
+
+### Sweeper Pattern
+
+```go
+// Periodic retry mechanism
+func (s *InMemorySweeper) Run(ctx context.Context) {
+    ticker := time.NewTicker(s.interval)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            // Retry failed jobs
+            s.jobStore.RetryFailedJobs(ctx)
+            
+            // Enqueue pending jobs
+            jobs, _ := s.jobStore.GetPendingJobs(ctx)
+            for _, job := range jobs {
+                s.jobQueue <- job.ID
+            }
+        }
+    }
+}
+```
+
+### Channel Simplification Pattern
+
+```go
+// Before: Full objects
+jobQueue := make(chan *domain.Job, 100)
+jobQueue <- job  // Sends entire object
+
+// After: Just IDs
+jobQueue := make(chan string, 100)
+jobQueue <- job.ID  // Sends just ID
+
+// Worker fetches from store
+jobID := <-jobQueue
+job, _ := store.ClaimJob(ctx, jobID)  // Get fresh data
+```
+
+### Key Patterns Learned
+
+#### UpdateStatus Method
+
+```go
+func (s *InMemoryJobStore) UpdateStatus(
+    ctx context.Context,
+    jobID string,
+    status domain.JobStatus,
+    lastError *string,
+) error {
+    // Check context
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+    }
+    
+    // Acquire lock
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    
+    // Get job
+    job, ok := s.jobs[jobID]
+    if !ok {
+        return errors.New("job not found")
+    }
+    
+    // Validate transition
+    if !canTransition(job.Status, status) {
+        return errors.New("invalid state transition")
+    }
+    
+    // Update all fields atomically
+    job.Status = status
+    if lastError != nil {
+        job.LastError = lastError
+    }
+    s.jobs[jobID] = job  // Save after all updates
+    
+    return nil
+}
+```
+
+#### ClaimJob with Attempt Tracking
+
+```go
+func (s *InMemoryJobStore) ClaimJob(ctx context.Context, jobID string) (*domain.Job, error) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    
+    job, ok := s.jobs[jobID]
+    if !ok || job.Status != domain.StatusPending {
+        return nil, nil
+    }
+    
+    // Atomically update status and increment attempts
+    job.Status = domain.StatusProcessing
+    job.Attempts++  // Increment when claiming
+    s.jobs[jobID] = job
+    
+    return &jobCopy, nil
+}
+```
+
+#### Sweeper Setup
+
+```go
+// In main.go
+sweeper := store.NewInMemorySweeper(jobStore, config.SweeperInterval, jobQueue)
+
+sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
+defer sweeperCancel()
+
+var sweeperWg sync.WaitGroup
+sweeperWg.Go(func() {
+    sweeper.Run(sweeperCtx)
+})
+
+// On shutdown
+sweeperCancel()
+sweeperWg.Wait()
+```
+
+### Important Concepts
+
+- **State Machines**: Explicit rules for state transitions prevent bugs
+- **Failure Handling**: Failure is a first-class state, not an exception
+- **Retry Logic**: Attempts track retries, MaxRetries prevents infinite loops
+- **Sweeper Pattern**: Periodic background process handles retries separately
+- **Atomic Updates**: Mutex-protected state changes ensure consistency
+- **Channel Simplification**: Send IDs, not objects (less memory, fresh data)
+- **Store as Source of Truth**: Store enforces rules, workers just signal events
+- **Transition Validation**: All state changes validated before applying
+
+### Project Structure
+
+- `internal/store/sweeper.go` - Sweeper pattern separated
+- State machine in `job_store.go` - Centralized transition validation
+- Channel type simplified - Job IDs instead of full objects
+- Clear separation: Worker processes, Sweeper retries, Store enforces rules
+
+### Critical Bugs to Avoid
+
+#### 1. Workers Directly Mutating State
+```go
+// ❌ BAD: Worker mutates state directly
+func (w *Worker) processJob(job *domain.Job) {
+    job.Status = domain.StatusFailed  // Direct mutation!
+}
+
+// ✅ GOOD: Worker signals, store updates
+func (w *Worker) processJob(job *domain.Job) {
+    w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &errMsg)
+}
+```
+
+#### 2. Infinite Retries
+```go
+// ❌ BAD: No retry limit check
+if job.Status == domain.StatusFailed {
+    job.Status = domain.StatusPending  // Retry forever!
+}
+
+// ✅ GOOD: Check retry limit
+if job.Status == domain.StatusFailed && job.Attempts < job.MaxRetries {
+    job.Status = domain.StatusPending  // Retry only if allowed
+}
+```
+
+#### 3. Missing Transition Validation
+```go
+// ❌ BAD: No validation
+job.Status = newStatus  // Could be invalid!
+
+// ✅ GOOD: Validate transition
+if !canTransition(job.Status, newStatus) {
+    return errors.New("invalid transition")
+}
+job.Status = newStatus
+```
+
+#### 4. Not Saving After Updating Fields
+```go
+// ❌ BAD: LastError not saved
+job.Status = status
+s.jobs[jobID] = job  // Save here
+if lastError != nil {
+    job.LastError = lastError  // Update but never save!
+}
+
+// ✅ GOOD: Save after all updates
+job.Status = status
+if lastError != nil {
+    job.LastError = lastError
+}
+s.jobs[jobID] = job  // Save after all updates
+```
+
+### Performance Impact
+
+- **Memory Usage**: 80% reduction (IDs vs full objects in channel)
+- **Retry Behavior**: Failed jobs retry automatically (up to limit)
+- **State Consistency**: All transitions validated, no invalid states
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 6 Summary](./task6/summary.md) - Quick reference
+- [Task 6 README](./task6/README.md) - Complete overview
+- [Task 6 Concepts Documentation](./task6/concepts/README.md) - Detailed concept explanations

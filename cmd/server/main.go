@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/config"
-	"github.com/karprabha/job-queue-backend/internal/domain"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
 	"github.com/karprabha/job-queue-backend/internal/store"
 	"github.com/karprabha/job-queue-backend/internal/worker"
@@ -22,7 +21,17 @@ func main() {
 
 	jobStore := store.NewInMemoryJobStore()
 
-	jobQueue := make(chan *domain.Job, config.JobQueueCapacity)
+	jobQueue := make(chan string, config.JobQueueCapacity)
+
+	sweeper := store.NewInMemorySweeper(jobStore, config.SweeperInterval, jobQueue)
+
+	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
+	defer sweeperCancel()
+
+	var sweeperWg sync.WaitGroup
+	sweeperWg.Go(func() {
+		sweeper.Run(sweeperCtx)
+	})
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
@@ -76,10 +85,14 @@ func main() {
 		log.Printf("Server shutdown error: %v", err)
 	}
 
-	// 2. NOW close the job queue (no more requests can enqueue)
+	// 2. Cancel sweeper and wait
+	sweeperCancel()
+	sweeperWg.Wait()
+
+	// 3. Close the job queue (no more requests can enqueue)
 	close(jobQueue)
 
-	// 3. Cancel workers and wait
+	// 4. Cancel workers and wait
 	workerCancel()
 	wg.Wait()
 
