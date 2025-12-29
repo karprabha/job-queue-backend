@@ -40,6 +40,10 @@ func main() {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 
+	// Create shutdown context for handlers to check shutdown state
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	defer shutdownCancel()
+
 	var wg sync.WaitGroup
 
 	for i := 0; i < config.WorkerCount; i++ {
@@ -53,7 +57,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	metricHandler := internalhttp.NewMetricHandler(metricStore, logger)
-	jobHandler := internalhttp.NewJobHandler(jobStore, metricStore, logger, jobQueue)
+	jobHandler := internalhttp.NewJobHandler(jobStore, metricStore, logger, jobQueue, shutdownCtx)
 
 	// Health Route
 	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
@@ -86,24 +90,34 @@ func main() {
 	<-sigChan
 	logger.Info("Shutting down...")
 
-	// 1. Shutdown HTTP server first (stops accepting new requests, waits for in-flight)
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
+	// 1. Signal shutdown to handlers (they will reject new jobs)
+	shutdownCancel()
+	logger.Info("Shutdown signal sent to handlers")
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("Server shutdown error", "error", err)
+	// 2. Shutdown HTTP server (stops accepting new requests, waits for in-flight)
+	serverShutdownCtx, serverShutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer serverShutdownCancel()
+
+	if err := srv.Shutdown(serverShutdownCtx); err != nil {
+		if err == context.DeadlineExceeded {
+			logger.Warn("Server shutdown timeout exceeded, forcing close")
+		} else {
+			logger.Error("Server shutdown error", "error", err)
+		}
 	}
 
-	// 2. Cancel sweeper and wait
+	// 3. Cancel sweeper and wait
 	sweeperCancel()
 	sweeperWg.Wait()
+	logger.Info("Sweeper stopped")
 
-	// 3. Close the job queue (no more requests can enqueue)
-	close(jobQueue)
-
-	// 4. Cancel workers and wait
+	// 4. Cancel workers (stops picking new jobs) and wait for them to finish current jobs
 	workerCancel()
 	wg.Wait()
+	logger.Info("Workers stopped")
+
+	// 5. Close the job queue (safe now that workers are done)
+	close(jobQueue)
 
 	logger.Info("Server stopped")
 }
