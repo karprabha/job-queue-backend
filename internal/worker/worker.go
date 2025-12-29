@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/karprabha/job-queue-backend/internal/domain"
@@ -10,16 +10,20 @@ import (
 )
 
 type Worker struct {
-	id       int
-	jobStore store.JobStore
-	jobQueue chan string
+	id          int
+	jobStore    store.JobStore
+	metricStore store.MetricStore
+	logger      *slog.Logger
+	jobQueue    chan string
 }
 
-func NewWorker(id int, jobStore store.JobStore, jobQueue chan string) *Worker {
+func NewWorker(id int, jobStore store.JobStore, metricStore store.MetricStore, logger *slog.Logger, jobQueue chan string) *Worker {
 	return &Worker{
-		id:       id,
-		jobStore: jobStore,
-		jobQueue: jobQueue,
+		id:          id,
+		jobStore:    jobStore,
+		metricStore: metricStore,
+		logger:      logger,
+		jobQueue:    jobQueue,
 	}
 }
 
@@ -27,26 +31,25 @@ func (w *Worker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Worker %d shutting down", w.id)
+			w.logger.Info("Worker shutting down", "worker_id", w.id)
 			return
 		case jobID, ok := <-w.jobQueue:
 			if !ok {
-				log.Printf("Worker %d shutting down because job queue is closed", w.id)
+				w.logger.Info("Worker shutting down because job queue is closed", "worker_id", w.id)
 				return
 			}
 			job, err := w.jobStore.ClaimJob(ctx, jobID)
 
 			if err != nil {
-				log.Printf("Worker %d error claiming job: %s: %v", w.id, jobID, err)
+				w.logger.Error("Worker error claiming job", "worker_id", w.id, "job_id", jobID, "error", err)
 				continue
 			}
 
 			if job == nil {
-				log.Printf("Worker %d job %s already claimed or invalid", w.id, jobID)
+				w.logger.Info("Worker job already claimed or invalid", "worker_id", w.id, "job_id", jobID)
 				continue
 			}
 
-			log.Printf("Worker %d processing job %s", w.id, jobID)
 			w.processJob(ctx, job)
 		}
 	}
@@ -56,12 +59,19 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 	timer := time.NewTimer(1 * time.Second)
 	defer timer.Stop()
 
+	err := w.metricStore.IncrementJobsInProgress(ctx)
+	if err != nil {
+		w.logger.Error("Worker error incrementing jobs in progress", "worker_id", w.id, "error", err)
+		return
+	}
+	w.logger.Info("Worker processing job", "worker_id", w.id, "job_id", job.ID)
+
 	select {
 	case <-timer.C:
 		// Processing complete
 	case <-ctx.Done():
 		// Shutdown requested, abort processing
-		log.Printf("Worker %d job %s processing aborted due to shutdown", w.id, job.ID)
+		w.logger.Info("Worker job processing aborted due to shutdown", "worker_id", w.id, "job_id", job.ID)
 		return
 	}
 
@@ -70,18 +80,30 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		lastError := "Email sending failed"
 		err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &lastError)
 		if err != nil {
-			log.Printf("Worker %d error updating job to failed: %s: %v", w.id, job.ID, err)
+			w.logger.Error("Worker error updating job to failed", "worker_id", w.id, "job_id", job.ID, "error", err)
 			return
 		}
-		log.Printf("Worker %d job %s failed", w.id, job.ID)
+		w.logger.Info("Worker job failed", "worker_id", w.id, "job_id", job.ID)
+
+		err = w.metricStore.IncrementJobsFailed(ctx)
+		if err != nil {
+			w.logger.Error("Worker error incrementing jobs failed", "worker_id", w.id, "error", err)
+			return
+		}
+
 		return
 	}
 
 	// Success - mark as completed
-	err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusCompleted, nil)
+	err = w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusCompleted, nil)
 	if err != nil {
-		log.Printf("Worker %d error updating job to completed: %s: %v", w.id, job.ID, err)
+		w.logger.Error("Worker error updating job to completed", "worker_id", w.id, "job_id", job.ID, "error", err)
 		return
 	}
-	log.Printf("Worker %d job %s completed successfully", w.id, job.ID)
+	err = w.metricStore.IncrementJobsCompleted(ctx)
+	if err != nil {
+		w.logger.Error("Worker error incrementing jobs completed", "worker_id", w.id, "error", err)
+		return
+	}
+	w.logger.Info("Worker job completed successfully", "worker_id", w.id, "job_id", job.ID)
 }

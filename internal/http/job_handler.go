@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -12,14 +13,18 @@ import (
 )
 
 type JobHandler struct {
-	store    store.JobStore
-	jobQueue chan string
+	store       store.JobStore
+	metricStore store.MetricStore
+	logger      *slog.Logger
+	jobQueue    chan string
 }
 
-func NewJobHandler(store store.JobStore, jobQueue chan string) *JobHandler {
+func NewJobHandler(store store.JobStore, metricStore store.MetricStore, logger *slog.Logger, jobQueue chan string) *JobHandler {
 	return &JobHandler{
-		store:    store,
-		jobQueue: jobQueue,
+		store:       store,
+		metricStore: metricStore,
+		logger:      logger,
+		jobQueue:    jobQueue,
 	}
 }
 
@@ -77,14 +82,21 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Info("Job created", "job_id", job.ID)
+
+	err = h.metricStore.IncrementJobsCreated(r.Context())
+	if err != nil {
+		h.logger.Error("Failed to increment jobs created", "error", err)
+	}
 
 	select {
 	case h.jobQueue <- job.ID:
-		// success
+		h.logger.Info("Job added to queue", "job_id", job.ID)
 	case <-r.Context().Done():
 		ErrorResponse(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	default:
+		h.logger.Error("Failed to add job to queue", "error", err)
 	}
 
 	response := jobToResponse(job)
