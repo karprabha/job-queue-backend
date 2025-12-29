@@ -13,6 +13,7 @@ import (
 
 	"github.com/karprabha/job-queue-backend/internal/config"
 	internalhttp "github.com/karprabha/job-queue-backend/internal/http"
+	"github.com/karprabha/job-queue-backend/internal/recovery"
 	"github.com/karprabha/job-queue-backend/internal/store"
 	"github.com/karprabha/job-queue-backend/internal/worker"
 )
@@ -22,21 +23,23 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
+	// 1. Initialize store
 	jobStore := store.NewInMemoryJobStore()
 	metricStore := store.NewInMemoryMetricStore()
 
+	// 2. Run recovery logic (BEFORE queue initialization and workers)
+	// Initialize queue for recovery (but workers not started yet)
 	jobQueue := make(chan string, config.JobQueueCapacity)
 
-	sweeper := store.NewInMemorySweeper(jobStore, metricStore, logger, config.SweeperInterval, jobQueue)
+	recoveryCtx := context.Background()
+	if err := recovery.RecoverJobs(recoveryCtx, jobStore, jobQueue, logger); err != nil {
+		log.Fatalf("Recovery failed: %v", err)
+	}
 
-	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
-	defer sweeperCancel()
+	// 3. Initialize queue (already done above)
+	// Queue is ready, now we can start workers
 
-	var sweeperWg sync.WaitGroup
-	sweeperWg.Go(func() {
-		sweeper.Run(sweeperCtx)
-	})
-
+	// 4. Start workers
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 
@@ -53,6 +56,17 @@ func main() {
 			worker.Start(workerCtx)
 		})
 	}
+
+	// Start sweeper (runs periodically to retry failed jobs and enqueue pending)
+	sweeper := store.NewInMemorySweeper(jobStore, metricStore, logger, config.SweeperInterval, jobQueue)
+
+	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
+	defer sweeperCancel()
+
+	var sweeperWg sync.WaitGroup
+	sweeperWg.Go(func() {
+		sweeper.Run(sweeperCtx)
+	})
 
 	mux := http.NewServeMux()
 
