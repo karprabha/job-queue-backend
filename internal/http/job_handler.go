@@ -96,8 +96,13 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	default:
+		h.store.DeleteJob(r.Context(), job.ID)
+		err = h.metricStore.DecrementJobsCreated(r.Context())
+		if err != nil {
+			h.logger.Error("Failed to decrement jobs created", "event", "metric_error", "error", err)
+		}
 		h.logger.Error("Failed to enqueue job", "event", "job_enqueue_failed", "job_id", job.ID, "error", "queue_full")
-		ErrorResponse(w, "Job queue is full", http.StatusServiceUnavailable)
+		ErrorResponse(w, "Job queue is full", http.StatusTooManyRequests)
 		return
 	}
 
