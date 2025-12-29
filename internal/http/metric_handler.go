@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/karprabha/job-queue-backend/internal/store"
@@ -9,10 +10,14 @@ import (
 
 type MetricHandler struct {
 	metricStore store.MetricStore
+	logger      *slog.Logger
 }
 
-func NewMetricHandler(metricStore store.MetricStore) *MetricHandler {
-	return &MetricHandler{metricStore: metricStore}
+func NewMetricHandler(metricStore store.MetricStore, logger *slog.Logger) *MetricHandler {
+	return &MetricHandler{
+		metricStore: metricStore,
+		logger:      logger,
+	}
 }
 
 type MetricResponse struct {
@@ -48,6 +53,7 @@ func (h *MetricHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
+		h.logger.Error("Failed to write response", "error", err)
 		return
 	}
 }

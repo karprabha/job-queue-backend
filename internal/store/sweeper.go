@@ -35,31 +35,29 @@ func (s *InMemorySweeper) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Info("Sweeper: context canceled, shutting down.")
+			s.logger.Info("Sweeper shutting down", "event", "sweeper_stopped")
 			return
 		case <-ticker.C:
 			if err := s.jobStore.RetryFailedJobs(ctx, s.metricStore, s.logger); err != nil {
-				s.logger.Error("Sweeper: error retrying failed jobs", "error", err, "retrying in", s.interval)
+				s.logger.Error("Sweeper error retrying failed jobs", "event", "sweeper_error", "error", err)
 				continue
 			}
 
 			jobs, err := s.jobStore.GetPendingJobs(ctx)
 			if err != nil {
-				s.logger.Error("Sweeper: error getting pending jobs", "error", err, "retrying in", s.interval)
+				s.logger.Error("Sweeper error getting pending jobs", "event", "sweeper_error", "error", err)
 				continue
 			}
-
-			s.logger.Info("Sweeper: fetched pending jobs", "count", len(jobs))
 
 			for _, job := range jobs {
 				select {
 				case <-ctx.Done():
-					s.logger.Info("Sweeper: context canceled, shutting down.")
+					s.logger.Info("Sweeper shutting down", "event", "sweeper_stopped")
 					return
 				case s.jobQueue <- job.ID:
-					s.logger.Info("Sweeper: job added to queue", "job_id", job.ID)
+					s.logger.Info("Job enqueued by sweeper", "event", "job_enqueued", "job_id", job.ID)
 				default:
-					s.logger.Info("Sweeper: job queue is full, job not added", "job_id", job.ID)
+					s.logger.Info("Job queue is full, job not added", "event", "job_enqueue_failed", "job_id", job.ID)
 				}
 			}
 		}

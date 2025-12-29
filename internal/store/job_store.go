@@ -194,7 +194,7 @@ func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context, metricStore Metr
 			if err != nil {
 				return err
 			}
-			logger.Info("Job retried", "job_id", jobID)
+			logger.Info("Job retried", "event", "job_retried", "job_id", jobID)
 		}
 	}
 

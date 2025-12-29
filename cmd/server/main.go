@@ -43,16 +43,16 @@ func main() {
 	var wg sync.WaitGroup
 
 	for i := 0; i < config.WorkerCount; i++ {
-		worker := worker.NewWorker(i, jobStore, metricStore, logger, jobQueue)
+		workerID := i // Capture loop variable to avoid closure issue
+		worker := worker.NewWorker(workerID, jobStore, metricStore, logger, jobQueue)
 		wg.Go(func() {
 			worker.Start(workerCtx)
-			logger.Info("Worker started", "worker_id", i)
 		})
 	}
 
 	mux := http.NewServeMux()
 
-	metricHandler := internalhttp.NewMetricHandler(metricStore)
+	metricHandler := internalhttp.NewMetricHandler(metricStore, logger)
 	jobHandler := internalhttp.NewJobHandler(jobStore, metricStore, logger, jobQueue)
 
 	// Health Route

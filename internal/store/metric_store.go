@@ -34,7 +34,9 @@ func (s *InMemoryMetricStore) GetMetrics(ctx context.Context) (*domain.Metric, e
 	default:
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		return s.metrics, nil
+		// Return a copy to prevent external mutation of internal state
+		m := *s.metrics
+		return &m, nil
 	}
 }
 
