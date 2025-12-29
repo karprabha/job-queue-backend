@@ -23,6 +23,7 @@ type Job struct {
 	Payload    json.RawMessage
 	MaxRetries int
 	Attempts   int
+	LastError  *string
 	CreatedAt  time.Time
 }
 
@@ -37,6 +38,7 @@ func NewJob(jobType string, jobPayload json.RawMessage) *Job {
 		Payload:    jobPayload,
 		MaxRetries: maxRetries,
 		Attempts:   attempts,
+		LastError:  nil,
 		CreatedAt:  time.Now().UTC(),
 	}
 

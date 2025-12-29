@@ -14,6 +14,7 @@ type JobStore interface {
 	GetJobs(ctx context.Context) ([]domain.Job, error)
 	ClaimJob(ctx context.Context, jobID string) (*domain.Job, error)
 	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus) error
+	MarkJobFailed(ctx context.Context, jobID string, errMsg string) (shouldRetry bool, retryErr error) // Add this
 }
 
 type InMemoryJobStore struct {
@@ -24,6 +25,21 @@ type InMemoryJobStore struct {
 func NewInMemoryJobStore() *InMemoryJobStore {
 	return &InMemoryJobStore{
 		jobs: make(map[string]domain.Job),
+	}
+}
+
+func canTransition(from, to domain.JobStatus) bool {
+	switch {
+	case from == domain.StatusPending && to == domain.StatusProcessing:
+		return true
+	case from == domain.StatusProcessing && to == domain.StatusCompleted:
+		return true
+	case from == domain.StatusProcessing && to == domain.StatusFailed:
+		return true
+	case from == domain.StatusFailed && to == domain.StatusPending:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -103,8 +119,45 @@ func (s *InMemoryJobStore) UpdateStatus(ctx context.Context, jobID string, statu
 		return errors.New("job not found in store")
 	}
 
+	// Validate transition
+	if !canTransition(job.Status, status) {
+		return errors.New("invalid state transition")
+	}
+
 	job.Status = status
 	s.jobs[jobID] = job
 
 	return nil
+}
+
+func (s *InMemoryJobStore) MarkJobFailed(ctx context.Context, jobID string, errMsg string) (shouldRetry bool, retryErr error) {
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return false, errors.New("job not found")
+	}
+
+	if job.Status != domain.StatusProcessing {
+		return false, errors.New("job is not in processing state")
+	}
+
+	job.Status = domain.StatusFailed
+	job.LastError = &errMsg
+	s.jobs[jobID] = job
+
+	if job.Attempts < job.MaxRetries {
+		job.Status = domain.StatusPending
+		s.jobs[jobID] = job
+		return true, nil
+	}
+
+	return false, nil
 }

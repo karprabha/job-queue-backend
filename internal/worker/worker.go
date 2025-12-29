@@ -52,15 +52,6 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 }
 
-func (w *Worker) updateJobStatus(ctx context.Context, jobID string, status domain.JobStatus) {
-	err := w.jobStore.UpdateStatus(ctx, jobID, status)
-	if err != nil {
-		log.Printf("Worker %d error updating job: %s: %v", w.id, jobID, err)
-		return
-	}
-	log.Printf("Worker %d job %s updated to %s", w.id, jobID, status)
-}
-
 func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 	timer := time.NewTimer(1 * time.Second)
 	defer timer.Stop()
@@ -74,20 +65,36 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 		return
 	}
 
-	if job.Type != "email" {
-		// success
-		w.updateJobStatus(ctx, job.ID, domain.StatusCompleted)
+	// Simulate failure deterministically
+	if job.Type == "email" {
+		// Signal failure to store
+		shouldRetry, err := w.jobStore.MarkJobFailed(ctx, job.ID, "simulated failure for email job type")
+		if err != nil {
+			log.Printf("Worker %d error marking job failed: %s: %v", w.id, job.ID, err)
+			return
+		}
+
+		if shouldRetry {
+			// Store has already set it back to pending, re-enqueue
+			select {
+			case w.jobQueue <- job.ID:
+				log.Printf("Worker %d re-queued job %s for retry (attempt %d/%d)", w.id, job.ID, job.Attempts+1, job.MaxRetries)
+			case <-ctx.Done():
+				log.Printf("Worker %d context cancelled while re-queuing job %s", w.id, job.ID)
+			default:
+				log.Printf("Worker %d job queue full, job %s will be picked up later", w.id, job.ID)
+			}
+		} else {
+			log.Printf("Worker %d job %s permanently failed after %d attempts", w.id, job.ID, job.Attempts)
+		}
 		return
 	}
 
-	// simulate failure
-	if job.Attempts < job.MaxRetries {
-		w.updateJobStatus(ctx, job.ID, domain.StatusPending)
-		// requeue job
-		w.jobQueue <- job.ID
+	// Success - mark as completed
+	err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusCompleted)
+	if err != nil {
+		log.Printf("Worker %d error updating job to completed: %s: %v", w.id, job.ID, err)
 		return
 	}
-
-	log.Printf("Worker %d job %s failed after %d attempts", w.id, job.ID, job.Attempts)
-	w.updateJobStatus(ctx, job.ID, domain.StatusFailed)
+	log.Printf("Worker %d job %s completed successfully", w.id, job.ID)
 }
