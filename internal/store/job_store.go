@@ -18,6 +18,7 @@ type JobStore interface {
 	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus, lastError *string) error
 	GetFailedJobs(ctx context.Context) ([]domain.Job, error)
 	GetPendingJobs(ctx context.Context) ([]domain.Job, error)
+	GetProcessingJobs(ctx context.Context) ([]domain.Job, error)
 	RetryFailedJobs(ctx context.Context, metricStore MetricStore, logger *slog.Logger) error
 }
 
@@ -42,6 +43,8 @@ func canTransition(from, to domain.JobStatus) bool {
 		return true
 	case from == domain.StatusFailed && to == domain.StatusPending:
 		return true
+	case from == domain.StatusProcessing && to == domain.StatusPending:
+		return true // Allow for recovery: processing -> pending
 	default:
 		return false
 	}
@@ -190,6 +193,26 @@ func (s *InMemoryJobStore) GetPendingJobs(ctx context.Context) ([]domain.Job, er
 	jobs := make([]domain.Job, 0, len(s.jobs))
 	for _, job := range s.jobs {
 		if job.Status == domain.StatusPending {
+			jobs = append(jobs, job)
+		}
+	}
+
+	return jobs, nil
+}
+
+func (s *InMemoryJobStore) GetProcessingJobs(ctx context.Context) ([]domain.Job, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobs := make([]domain.Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if job.Status == domain.StatusProcessing {
 			jobs = append(jobs, job)
 		}
 	}
