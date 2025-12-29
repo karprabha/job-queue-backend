@@ -12,6 +12,7 @@ import (
 
 type JobStore interface {
 	CreateJob(ctx context.Context, job *domain.Job) error
+	DeleteJob(ctx context.Context, jobID string) error
 	GetJobs(ctx context.Context) ([]domain.Job, error)
 	ClaimJob(ctx context.Context, jobID string) (*domain.Job, error)
 	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus, lastError *string) error
@@ -57,6 +58,26 @@ func (s *InMemoryJobStore) CreateJob(ctx context.Context, job *domain.Job) error
 	defer s.mu.Unlock()
 
 	s.jobs[job.ID] = *job
+
+	return nil
+}
+
+func (s *InMemoryJobStore) DeleteJob(ctx context.Context, jobID string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.jobs[jobID]
+	if !ok {
+		return errors.New("job not found in store")
+	}
+
+	delete(s.jobs, jobID)
 
 	return nil
 }

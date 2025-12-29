@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,18 +14,20 @@ import (
 )
 
 type JobHandler struct {
-	store       store.JobStore
-	metricStore store.MetricStore
-	logger      *slog.Logger
-	jobQueue    chan string
+	store         store.JobStore
+	metricStore   store.MetricStore
+	logger        *slog.Logger
+	jobQueue      chan string
+	shutdownCtx   context.Context
 }
 
-func NewJobHandler(store store.JobStore, metricStore store.MetricStore, logger *slog.Logger, jobQueue chan string) *JobHandler {
+func NewJobHandler(store store.JobStore, metricStore store.MetricStore, logger *slog.Logger, jobQueue chan string, shutdownCtx context.Context) *JobHandler {
 	return &JobHandler{
 		store:       store,
 		metricStore: metricStore,
 		logger:      logger,
 		jobQueue:    jobQueue,
+		shutdownCtx: shutdownCtx,
 	}
 }
 
@@ -49,6 +52,14 @@ func jobToResponse(job *domain.Job) JobResponse {
 }
 
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
+	// Check if server is shutting down - reject new jobs during shutdown
+	select {
+	case <-h.shutdownCtx.Done():
+		ErrorResponse(w, "Server is shutting down", http.StatusServiceUnavailable)
+		return
+	default:
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1MB max
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -96,8 +107,13 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	default:
+		h.store.DeleteJob(r.Context(), job.ID)
+		err = h.metricStore.DecrementJobsCreated(r.Context())
+		if err != nil {
+			h.logger.Error("Failed to decrement jobs created", "event", "metric_error", "error", err)
+		}
 		h.logger.Error("Failed to enqueue job", "event", "job_enqueue_failed", "job_id", job.ID, "error", "queue_full")
-		ErrorResponse(w, "Job queue is full", http.StatusServiceUnavailable)
+		ErrorResponse(w, "Job queue is full", http.StatusTooManyRequests)
 		return
 	}
 

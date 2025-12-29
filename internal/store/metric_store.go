@@ -10,6 +10,7 @@ import (
 type MetricStore interface {
 	GetMetrics(ctx context.Context) (*domain.Metric, error)
 	IncrementJobsCreated(ctx context.Context) error
+	DecrementJobsCreated(ctx context.Context) error
 	IncrementJobsCompleted(ctx context.Context) error
 	IncrementJobsFailed(ctx context.Context) error
 	IncrementJobsRetried(ctx context.Context) error
@@ -52,6 +53,21 @@ func (s *InMemoryMetricStore) IncrementJobsCreated(ctx context.Context) error {
 		return nil
 	}
 
+}
+
+func (s *InMemoryMetricStore) DecrementJobsCreated(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if s.metrics.TotalJobsCreated > 0 {
+			s.metrics.TotalJobsCreated--
+		}
+		return nil
+	}
 }
 
 func (s *InMemoryMetricStore) IncrementJobsCompleted(ctx context.Context) error {

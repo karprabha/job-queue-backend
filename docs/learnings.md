@@ -1334,3 +1334,260 @@ For comprehensive explanations, see:
 - [Task 7 Summary](./task7/summary.md) - Quick reference
 - [Task 7 README](./task7/README.md) - Complete overview
 - [Task 7 Concepts Documentation](./task7/concepts/README.md) - Detailed concept explanations
+
+---
+
+## Task 8 — Graceful Shutdown, Backpressure & Load Safety
+
+### Quick Setup Commands
+
+- No new dependencies needed (uses standard library: `context`, `sync`, `time`)
+
+### Graceful Shutdown Pattern (Memorize This)
+
+```go
+// 1. Create shutdown context for handlers
+shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+defer shutdownCancel()
+
+// 2. Inject into handlers
+jobHandler := internalhttp.NewJobHandler(..., shutdownCtx)
+
+// 3. On shutdown signal
+shutdownCancel()  // Signal handlers to reject new jobs
+
+// 4. Shutdown HTTP server with timeout
+serverShutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+srv.Shutdown(serverShutdownCtx)
+
+// 5. Stop sweeper
+sweeperCancel()
+sweeperWg.Wait()
+
+// 6. Stop workers and wait
+workerCancel()
+wg.Wait()
+
+// 7. Close channel (safe now)
+close(jobQueue)
+```
+
+### Backpressure Pattern (Memorize This)
+
+```go
+// 1. Limited queue capacity
+jobQueue := make(chan string, config.JobQueueCapacity)  // e.g., 100
+
+// 2. Non-blocking send in handler
+select {
+case h.jobQueue <- job.ID:
+    // Successfully enqueued
+case <-r.Context().Done():
+    // Request canceled
+    ErrorResponse(w, "Request cancelled", http.StatusRequestTimeout)
+    return
+default:
+    // Queue is full - reject
+    h.store.DeleteJob(r.Context(), job.ID)
+    h.metricStore.DecrementJobsCreated(r.Context())
+    ErrorResponse(w, "Job queue is full", http.StatusTooManyRequests)
+    return
+}
+```
+
+### Shutdown State Checking Pattern
+
+```go
+type JobHandler struct {
+    shutdownCtx context.Context  // Injected shutdown context
+}
+
+func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
+    // Check shutdown state first
+    select {
+    case <-h.shutdownCtx.Done():
+        ErrorResponse(w, "Server is shutting down", http.StatusServiceUnavailable)
+        return
+    default:
+    }
+    
+    // Continue with normal processing...
+}
+```
+
+### Worker Job Cleanup Pattern
+
+```go
+func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
+    select {
+    case <-timer.C:
+        // Processing complete
+    case <-ctx.Done():
+        // Shutdown during processing - clean up
+        lastError := "Job aborted due to shutdown"
+        w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &lastError)
+        w.metricStore.IncrementJobsFailed(ctx)
+        return
+    }
+    
+    // ... continue with normal processing ...
+}
+```
+
+### Key Patterns Learned
+
+#### Shutdown Coordination
+
+```go
+// Proper shutdown sequence
+// 1. Signal handlers (reject new work)
+shutdownCancel()
+
+// 2. Shutdown server (stop accepting)
+srv.Shutdown(serverShutdownCtx)
+
+// 3. Stop sweeper
+sweeperCancel()
+sweeperWg.Wait()
+
+// 4. Stop workers
+workerCancel()
+wg.Wait()
+
+// 5. Close channel
+close(jobQueue)
+```
+
+#### Non-Blocking Channel Operations
+
+```go
+// Blocking (bad for HTTP handlers)
+jobQueue <- job.ID  // Blocks if queue full
+
+// Non-blocking (good for HTTP handlers)
+select {
+case jobQueue <- job.ID:
+    // Success
+default:
+    // Reject immediately
+}
+```
+
+#### Channel Ownership
+
+```go
+// In main() - main() owns the channel
+jobQueue := make(chan string, capacity)
+
+// Pass to components (they use it, but don't own it)
+jobHandler := internalhttp.NewJobHandler(..., jobQueue)
+worker := worker.NewWorker(..., jobQueue)
+
+// Only main() closes it
+close(jobQueue)  // After all users stop
+```
+
+### Important Concepts
+
+- **Graceful Shutdown**: Coordinated shutdown of all components in correct order
+- **Backpressure**: Reject work when system is overloaded
+- **Channel Ownership**: Only owner should close channel
+- **Shutdown State Checking**: Handlers must reject new work during shutdown
+- **Job State Cleanup**: Workers must clean up job state when interrupted
+- **Non-Blocking Operations**: HTTP handlers must never block indefinitely
+- **Context Propagation**: Use contexts to signal shutdown to all components
+- **WaitGroups**: Wait for goroutines to finish before closing channels
+- **HTTP 429**: Use for temporary overload conditions
+- **Proper Sequence**: Stop accepting → Finish current → Close channels
+
+### Project Structure
+
+- Shutdown coordination in `main()`
+- Shutdown context for handlers
+- Job cleanup in workers
+- Backpressure in handlers
+
+### Critical Bugs to Avoid
+
+#### 1. Jobs Left in Processing State
+```go
+// ❌ BAD: Job stuck in processing
+case <-ctx.Done():
+    return  // Job never cleaned up
+
+// ✅ GOOD: Clean up job state
+case <-ctx.Done():
+    lastError := "Job aborted due to shutdown"
+    w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &lastError)
+    return
+```
+
+#### 2. Handlers Accepting Jobs During Shutdown
+```go
+// ❌ BAD: No shutdown check
+func (h *JobHandler) CreateJob(...) {
+    h.jobQueue <- job.ID  // Accepted during shutdown!
+}
+
+// ✅ GOOD: Check shutdown state
+func (h *JobHandler) CreateJob(...) {
+    select {
+    case <-h.shutdownCtx.Done():
+        ErrorResponse(w, "Server is shutting down", http.StatusServiceUnavailable)
+        return
+    default:
+    }
+    // Continue...
+}
+```
+
+#### 3. Closing Channel Too Early
+```go
+// ❌ BAD: Close before workers stop
+close(jobQueue)
+workerCancel()
+wg.Wait()
+
+// ✅ GOOD: Stop workers first
+workerCancel()
+wg.Wait()
+close(jobQueue)  // Safe now
+```
+
+#### 4. Blocking on Full Channel
+```go
+// ❌ BAD: Handler blocks
+h.jobQueue <- job.ID  // Blocks if queue full!
+
+// ✅ GOOD: Non-blocking with rejection
+select {
+case h.jobQueue <- job.ID:
+    // Success
+default:
+    ErrorResponse(w, "Job queue is full", http.StatusTooManyRequests)
+    return
+}
+```
+
+### Performance Impact
+
+**Shutdown Behavior:**
+- Shutdown completes within 10 seconds (timeout)
+- All in-flight jobs finish or are cleaned up
+- No jobs left in "processing" state
+- No goroutine leaks
+
+**Backpressure Behavior:**
+- System rejects excess work immediately
+- Handlers never block
+- Memory usage bounded by queue capacity
+- System remains responsive under load
+
+### Detailed Documentation
+
+For comprehensive explanations, see:
+
+- [Task 8 Summary](./task8/summary.md) - Quick reference
+- [Task 8 README](./task8/README.md) - Complete overview
+- [Task 8 Concepts Documentation](./task8/concepts/README.md) - Detailed concept explanations

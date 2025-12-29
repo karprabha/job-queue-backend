@@ -71,8 +71,20 @@ func (w *Worker) processJob(ctx context.Context, job *domain.Job) {
 	case <-timer.C:
 		// Processing complete
 	case <-ctx.Done():
-		// Shutdown requested, abort processing
+		// Shutdown requested, abort processing - clean up job state
 		w.logger.Info("Worker job processing aborted due to shutdown", "event", "job_aborted", "worker_id", w.id, "job_id", job.ID)
+		
+		// Mark job as failed due to shutdown to prevent it from being stuck in processing state
+		lastError := "Job aborted due to shutdown"
+		if err := w.jobStore.UpdateStatus(ctx, job.ID, domain.StatusFailed, &lastError); err != nil {
+			w.logger.Error("Worker error updating aborted job to failed", "event", "job_update_error", "worker_id", w.id, "job_id", job.ID, "error", err)
+		} else {
+			// IncrementJobsFailed also decrements JobsInProgress, so this handles both metrics
+			if err := w.metricStore.IncrementJobsFailed(ctx); err != nil {
+				w.logger.Error("Worker error incrementing jobs failed for aborted job", "event", "metric_error", "worker_id", w.id, "error", err)
+			}
+		}
+		
 		return
 	}
 
