@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,11 +20,14 @@ import (
 func main() {
 	config := config.NewConfig()
 
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
 	jobStore := store.NewInMemoryJobStore()
+	metricStore := store.NewInMemoryMetricStore()
 
 	jobQueue := make(chan string, config.JobQueueCapacity)
 
-	sweeper := store.NewInMemorySweeper(jobStore, config.SweeperInterval, jobQueue)
+	sweeper := store.NewInMemorySweeper(jobStore, metricStore, logger, config.SweeperInterval, jobQueue)
 
 	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
 	defer sweeperCancel()
@@ -39,7 +43,8 @@ func main() {
 	var wg sync.WaitGroup
 
 	for i := 0; i < config.WorkerCount; i++ {
-		worker := worker.NewWorker(i, jobStore, jobQueue)
+		workerID := i // Capture loop variable to avoid closure issue
+		worker := worker.NewWorker(workerID, jobStore, metricStore, logger, jobQueue)
 		wg.Go(func() {
 			worker.Start(workerCtx)
 		})
@@ -47,7 +52,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	jobHandler := internalhttp.NewJobHandler(jobStore, jobQueue)
+	metricHandler := internalhttp.NewMetricHandler(metricStore, logger)
+	jobHandler := internalhttp.NewJobHandler(jobStore, metricStore, logger, jobQueue)
 
 	// Health Route
 	mux.HandleFunc("GET /health", internalhttp.HealthCheckHandler)
@@ -55,6 +61,9 @@ func main() {
 	// Job Routes
 	mux.HandleFunc("GET /jobs", jobHandler.GetJobs)
 	mux.HandleFunc("POST /jobs", jobHandler.CreateJob)
+
+	// Metric Routes
+	mux.HandleFunc("GET /metrics", metricHandler.GetMetrics)
 
 	// Create http.Server instance
 	srv := &http.Server{
@@ -75,14 +84,14 @@ func main() {
 
 	// Wait for shutdown signal
 	<-sigChan
-	log.Println("Shutting down...")
+	logger.Info("Shutting down...")
 
 	// 1. Shutdown HTTP server first (stops accepting new requests, waits for in-flight)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
+		logger.Error("Server shutdown error", "error", err)
 	}
 
 	// 2. Cancel sweeper and wait
@@ -96,5 +105,5 @@ func main() {
 	workerCancel()
 	wg.Wait()
 
-	log.Println("Server stopped")
+	logger.Info("Server stopped")
 }

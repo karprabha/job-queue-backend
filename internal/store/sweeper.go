@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -11,16 +11,20 @@ type Sweeper interface {
 }
 
 type InMemorySweeper struct {
-	jobStore JobStore
-	interval time.Duration
-	jobQueue chan string
+	jobStore    JobStore
+	metricStore MetricStore
+	logger      *slog.Logger
+	interval    time.Duration
+	jobQueue    chan string
 }
 
-func NewInMemorySweeper(jobStore JobStore, interval time.Duration, jobQueue chan string) *InMemorySweeper {
+func NewInMemorySweeper(jobStore JobStore, metricStore MetricStore, logger *slog.Logger, interval time.Duration, jobQueue chan string) *InMemorySweeper {
 	return &InMemorySweeper{
-		jobStore: jobStore,
-		interval: interval,
-		jobQueue: jobQueue,
+		jobStore:    jobStore,
+		metricStore: metricStore,
+		logger:      logger,
+		interval:    interval,
+		jobQueue:    jobQueue,
 	}
 }
 
@@ -31,31 +35,29 @@ func (s *InMemorySweeper) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Sweeper: context canceled, shutting down.")
+			s.logger.Info("Sweeper shutting down", "event", "sweeper_stopped")
 			return
 		case <-ticker.C:
-			if err := s.jobStore.RetryFailedJobs(ctx); err != nil {
-				log.Printf("Sweeper: error retrying failed jobs: %v, retrying in %s", err, s.interval)
+			if err := s.jobStore.RetryFailedJobs(ctx, s.metricStore, s.logger); err != nil {
+				s.logger.Error("Sweeper error retrying failed jobs", "event", "sweeper_error", "error", err)
 				continue
 			}
 
 			jobs, err := s.jobStore.GetPendingJobs(ctx)
 			if err != nil {
-				log.Printf("Sweeper: error getting pending jobs: %v, retrying in %s", err, s.interval)
+				s.logger.Error("Sweeper error getting pending jobs", "event", "sweeper_error", "error", err)
 				continue
 			}
-
-			log.Printf("Sweeper: fetched %d pending jobs", len(jobs))
 
 			for _, job := range jobs {
 				select {
 				case <-ctx.Done():
-					log.Println("Sweeper: context canceled, shutting down.")
+					s.logger.Info("Sweeper shutting down", "event", "sweeper_stopped")
 					return
 				case s.jobQueue <- job.ID:
-					log.Printf("Sweeper: job %s added to queue", job.ID)
+					s.logger.Info("Job enqueued by sweeper", "event", "job_enqueued", "job_id", job.ID)
 				default:
-					log.Printf("Sweeper: job queue is full, job %s not added", job.ID)
+					s.logger.Info("Job queue is full, job not added", "event", "job_enqueue_failed", "job_id", job.ID)
 				}
 			}
 		}

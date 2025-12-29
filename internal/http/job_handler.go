@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -12,14 +13,18 @@ import (
 )
 
 type JobHandler struct {
-	store    store.JobStore
-	jobQueue chan string
+	store       store.JobStore
+	metricStore store.MetricStore
+	logger      *slog.Logger
+	jobQueue    chan string
 }
 
-func NewJobHandler(store store.JobStore, jobQueue chan string) *JobHandler {
+func NewJobHandler(store store.JobStore, metricStore store.MetricStore, logger *slog.Logger, jobQueue chan string) *JobHandler {
 	return &JobHandler{
-		store:    store,
-		jobQueue: jobQueue,
+		store:       store,
+		metricStore: metricStore,
+		logger:      logger,
+		jobQueue:    jobQueue,
 	}
 }
 
@@ -77,14 +82,23 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Info("Job created", "event", "job_created", "job_id", job.ID)
+
+	err = h.metricStore.IncrementJobsCreated(r.Context())
+	if err != nil {
+		h.logger.Error("Failed to increment jobs created", "error", err)
+	}
 
 	select {
 	case h.jobQueue <- job.ID:
-		// success
+		h.logger.Info("Job enqueued", "event", "job_enqueued", "job_id", job.ID)
 	case <-r.Context().Done():
 		ErrorResponse(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	default:
+		h.logger.Error("Failed to enqueue job", "event", "job_enqueue_failed", "job_id", job.ID, "error", "queue_full")
+		ErrorResponse(w, "Job queue is full", http.StatusServiceUnavailable)
+		return
 	}
 
 	response := jobToResponse(job)
@@ -99,6 +113,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 
 	if _, err := w.Write(responseBytes); err != nil {
+		h.logger.Error("Failed to write response", "error", err)
 		return
 	}
 }
@@ -125,6 +140,7 @@ func (h *JobHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
+		h.logger.Error("Failed to write response", "error", err)
 		return
 	}
 }

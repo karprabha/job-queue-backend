@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -16,7 +17,7 @@ type JobStore interface {
 	UpdateStatus(ctx context.Context, jobID string, status domain.JobStatus, lastError *string) error
 	GetFailedJobs(ctx context.Context) ([]domain.Job, error)
 	GetPendingJobs(ctx context.Context) ([]domain.Job, error)
-	RetryFailedJobs(ctx context.Context) error
+	RetryFailedJobs(ctx context.Context, metricStore MetricStore, logger *slog.Logger) error
 }
 
 type InMemoryJobStore struct {
@@ -175,7 +176,7 @@ func (s *InMemoryJobStore) GetPendingJobs(ctx context.Context) ([]domain.Job, er
 	return jobs, nil
 }
 
-func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context) error {
+func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context, metricStore MetricStore, logger *slog.Logger) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -189,6 +190,11 @@ func (s *InMemoryJobStore) RetryFailedJobs(ctx context.Context) error {
 		if job.Status == domain.StatusFailed && job.Attempts <= job.MaxRetries {
 			job.Status = domain.StatusPending
 			s.jobs[jobID] = job
+			err := metricStore.IncrementJobsRetried(ctx)
+			if err != nil {
+				return err
+			}
+			logger.Info("Job retried", "event", "job_retried", "job_id", jobID)
 		}
 	}
 
